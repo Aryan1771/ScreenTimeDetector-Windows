@@ -1,8 +1,21 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod notifications;
 mod platform;
 mod storage;
 #[cfg(windows)]
 mod tray;
+#[cfg(windows)]
+mod windows_app;
+#[cfg(not(windows))]
+mod windows_app {
+    pub fn startup_enabled() -> bool {
+        false
+    }
+    pub fn set_startup_enabled(_enabled: bool) -> Result<(), String> {
+        Err("Sign-in startup is only available on Windows.".into())
+    }
+}
 
 use chrono::{Local, NaiveDate, Timelike};
 use directories::ProjectDirs;
@@ -29,10 +42,33 @@ struct FocusSession {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut background_start = false;
+    let mut data_dir_override = None;
+    let mut args = std::env::args_os().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--background" {
+            background_start = true;
+        } else if arg == "--data-dir" {
+            data_dir_override = args.next().map(PathBuf::from);
+        } else if let Some(path) = arg
+            .to_str()
+            .and_then(|value| value.strip_prefix("--data-dir="))
+        {
+            data_dir_override = Some(PathBuf::from(path));
+        }
+    }
+    #[cfg(windows)]
+    let instance_guard = {
+        let Some(instance) = windows_app::SingleInstance::acquire()? else {
+            return Ok(());
+        };
+        instance
+    };
     let dirs = ProjectDirs::from("org", "DigitalWellbeing", "DigitalWellbeing")
         .ok_or("could not locate per-user data directory")?;
-    std::fs::create_dir_all(dirs.data_dir())?;
-    let db_path = dirs.data_dir().join("wellbeing.sqlite3");
+    let data_dir = data_dir_override.unwrap_or_else(|| dirs.data_dir().to_path_buf());
+    std::fs::create_dir_all(&data_dir)?;
+    let db_path = data_dir.join("wellbeing.sqlite3");
     let db = storage::Database::open(&db_path)?;
     let _ = db.recover_focus_sessions();
     let monitoring_supported = platform::supported();
@@ -55,7 +91,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let window = AppWindow::new()?;
     #[cfg(windows)]
+    if background_start {
+        window.window().hide()?;
+    }
+    #[cfg(windows)]
     let tray_instance = tray::Tray::new().ok();
+    #[cfg(windows)]
+    let tray_available = tray_instance.is_some();
     #[cfg(windows)]
     if tray_instance.is_none() {
         window.set_notice_text(
@@ -64,7 +106,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     #[cfg(windows)]
     {
-        let tray_available = tray_instance.is_some();
         window.window().on_close_requested(move || {
             if tray_available {
                 slint::CloseRequestResponse::HideWindow
@@ -85,9 +126,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window.set_usages(ModelRc::new(VecModel::from(Vec::<UsageItem>::new())));
     window.set_hourly_bars(ModelRc::new(VecModel::from(Vec::<ChartItem>::new())));
     window.set_weekly_bars(ModelRc::new(VecModel::from(Vec::<ChartItem>::new())));
-    window.set_date_label(format_day(Local::now().date_naive()).into());
+    let initial_day = Local::now().date_naive();
+    window.set_date_label(format_day(initial_day).into());
+    if let Ok((total, _)) = db.summary_for_day(&initial_day) {
+        window.set_today_total(format_duration(total).into());
+    }
+    window.set_startup_supported(cfg!(windows));
+    window.set_startup_enabled(windows_app::startup_enabled());
     if let Err(error) = notification_setup {
         window.set_notice_text(format!("Windows notifications unavailable: {error}").into());
+    }
+
+    {
+        let weak = window.as_weak();
+        window.on_set_startup_enabled(move |enabled| {
+            match windows_app::set_startup_enabled(enabled) {
+                Ok(()) => {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_startup_enabled(enabled);
+                        w.set_notice_text(if enabled {
+                            "Digital Wellbeing will start hidden in the tray when you sign in."
+                                .into()
+                        } else {
+                            "Automatic sign-in startup is disabled.".into()
+                        });
+                    }
+                }
+                Err(error) => {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_startup_enabled(windows_app::startup_enabled());
+                        w.set_notice_text(error.into());
+                    }
+                }
+            }
+        });
     }
 
     {
@@ -310,49 +382,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let weak = window.as_weak();
-    let refresh_path = db_path;
+    let refresh_path = db_path.clone();
     let focus_state = focus.clone();
     let day_state = selected_day.clone();
     let alert_rx = alert_rx;
     #[cfg(windows)]
     let tray_tracking = tracking.clone();
     #[cfg(windows)]
-    let tray_instance = tray_instance;
-    let timer = slint::Timer::default();
-    if let Ok(goal) = db.goal_minutes() {
-        window.set_goal_label(format!("{}h {:02}m", goal / 60, goal % 60).into());
-        window.set_goal_minutes(goal.clamp(15, 720) as i32);
-    }
-    let theme_mode = db.preference("theme_mode", "system")?;
-    window.set_theme_mode(theme_mode.clone().into());
-    window.set_dark_theme(
-        theme_mode == "dark" || (theme_mode == "system" && platform::system_dark_theme()),
-    );
-    if let Ok(count) = db.completed_focus_count() {
-        window.set_focus_count(format!("{count} completed this week").into());
-    }
-    window.set_break_minutes(break_minutes.load(Ordering::Relaxed).min(120) as i32);
-    let mut last_theme_check = Instant::now();
-    timer.start(TimerMode::Repeated, Duration::from_secs(5), move || {
-        let Some(w) = weak.upgrade() else {
-            return;
-        };
-        #[cfg(windows)]
-        if let Some(tray) = tray_instance.as_ref() {
+    let tray_for_tooltip = tray_instance.clone();
+    #[cfg(windows)]
+    let activation_timer = slint::Timer::default();
+    #[cfg(windows)]
+    {
+        let weak = window.as_weak();
+        let tray = tray_instance;
+        let tracking = tracking.clone();
+        let focus = focus.clone();
+        let db_path = db_path.clone();
+        activation_timer.start(TimerMode::Repeated, Duration::from_millis(250), move || {
+            let Some(w) = weak.upgrade() else {
+                return;
+            };
+            if instance_guard.take_activation_request() {
+                let _ = w.window().show();
+            }
+            let Some(tray) = tray.as_ref() else {
+                return;
+            };
             while let Some(action) = tray.next_action() {
                 match action {
                     tray::Action::Open => {
                         let _ = w.window().show();
                     }
                     tray::Action::StartFocus => {
-                        let mut active = focus_state.lock().unwrap_or_else(|e| e.into_inner());
+                        let mut active = focus.lock().unwrap_or_else(|e| e.into_inner());
                         if let Some(session) = active.as_mut() {
                             if session.deadline.is_none() {
                                 session.deadline = Some(Instant::now() + session.remaining);
                             }
                         } else {
                             let minutes = 25_u64;
-                            let id = storage::Database::open(&refresh_path)
+                            let id = storage::Database::open(&db_path)
                                 .and_then(|db| db.start_focus(minutes as i64))
                                 .unwrap_or(-1);
                             let remaining = Duration::from_secs(minutes * 60);
@@ -366,8 +436,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         w.set_focus_text(focus_message(active.as_ref()).into());
                     }
                     tray::Action::ToggleTracking => {
-                        let next = !tray_tracking.load(Ordering::Relaxed);
-                        tray_tracking.store(next, Ordering::Relaxed);
+                        let next = !tracking.load(Ordering::Relaxed);
+                        tracking.store(next, Ordering::Relaxed);
                         w.set_tracking(next);
                         w.set_status_text(
                             if next {
@@ -383,7 +453,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-        }
+        });
+    }
+    let timer = slint::Timer::default();
+    if let Ok(goal) = db.goal_minutes() {
+        window.set_goal_label(format!("{}h {:02}m", goal / 60, goal % 60).into());
+        window.set_goal_minutes(goal.clamp(15, 720) as i32);
+    }
+    let theme_mode = db.preference("theme_mode", "system")?;
+    window.set_theme_mode(theme_mode.clone().into());
+    window.set_dark_theme(
+        theme_mode == "dark" || (theme_mode == "system" && platform::system_dark_theme()),
+    );
+    if let Ok(count) = db.completed_focus_count() {
+        window.set_focus_count(format!("{count} completed this week").into());
+    }
+    window.set_break_minutes(break_minutes.load(Ordering::Relaxed).min(120) as i32);
+    let mut last_theme_check = Instant::now();
+    timer.start(TimerMode::Repeated, Duration::from_secs(1), move || {
+        let Some(w) = weak.upgrade() else {
+            return;
+        };
         if last_theme_check.elapsed() >= Duration::from_secs(15) {
             last_theme_check = Instant::now();
             if let Ok(db) = storage::Database::open(&refresh_path) {
@@ -409,7 +499,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Ok((total, rows)) = db.summary_for_day(&day) {
                 w.set_today_total(format_duration(total).into());
                 #[cfg(windows)]
-                if let Some(tray) = tray_instance.as_ref() {
+                if let Some(tray) = tray_for_tooltip.as_ref() {
                     let today_total = db
                         .summary_for_day(&Local::now().date_naive())
                         .map(|summary| summary.0)
@@ -516,7 +606,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     });
-    window.run()?;
+    #[cfg(windows)]
+    if !background_start || !tray_available {
+        window.window().show()?;
+    }
+    #[cfg(not(windows))]
+    window.window().show()?;
+    #[cfg(windows)]
+    let _startup_visibility_timer = if background_start && tray_available {
+        let timer = slint::Timer::default();
+        let weak = window.as_weak();
+        timer.start(
+            TimerMode::SingleShot,
+            Duration::from_millis(500),
+            move || {
+                if let Some(window) = weak.upgrade() {
+                    let _ = window.window().hide();
+                    windows_app::hide_dashboard_window();
+                }
+            },
+        );
+        Some(timer)
+    } else {
+        None
+    };
+    slint::run_event_loop_until_quit()?;
     Ok(())
 }
 

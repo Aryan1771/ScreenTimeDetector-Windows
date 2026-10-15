@@ -20,8 +20,10 @@ This is an early Windows release, not yet the complete product vision. The Windo
 | System / light / dark theme | Implemented and saved locally |
 | CSV export / delete all history | Implemented |
 | Native Windows notifications | Implemented in the installed build; the Start-menu shortcut registers the notification identity |
-| Windows installer / optional sign-in launch | Inno Setup script provided |
+| Windows installer / sign-in launch | Per-user installer; startup is selected by default and can be changed in setup or Settings; starts hidden after sign-in |
 | System tray / keep tracking with dashboard hidden | Implemented; tray opens dashboard, starts/resumes a 25-minute focus, toggles tracking, or quits; tooltip shows today's total |
+| One running tracker / fast dashboard reopen | Implemented; a second launch activates the existing process instead of duplicating tracking |
+| Windows console window | Disabled; app launches as a GUI process |
 | Browser domains / uploads / private-window integration | Not implemented |
 | Bedtime schedules / OS Do Not Disturb | Not implemented |
 | Hard app enforcement | Not implemented; limits are advisory |
@@ -39,7 +41,7 @@ cargo test --locked
 cargo build --release --locked
 ```
 
-The portable executable is `target\release\digital-wellbeing.exe`. Keep that process open while tracking. Windows toast notifications from a directly launched portable binary may not be associated with a registered application identity; build and install the setup package for reliable notifications.
+The portable executable is `target\release\digital-wellbeing.exe`. The process stays in the tray when the dashboard is hidden. Opening the app again brings the existing dashboard forward and shows accumulated time. Windows toast notifications from a directly launched portable binary may not be associated with a registered application identity; build and install the setup package for reliable notifications.
 
 To build the installer, install Inno Setup 6, then run:
 
@@ -48,7 +50,7 @@ cargo build --release --locked
 & "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" packaging\windows\DigitalWellbeing.iss
 ```
 
-The installer is created at `target\installer\DigitalWellbeing-Setup-x64.exe`. It installs per-user without administrator rights. The optional startup task launches the dashboard at sign-in. Uninstall it from Windows Installed apps; user history is kept unless manually deleted in Settings before uninstalling.
+The installer is created at `target\installer\DigitalWellbeing-Setup-x64.exe`. It installs per-user without administrator rights. Its startup task is selected by default and launches the app hidden in the tray at sign-in; you can clear it during setup or change the setting later in Settings. Uninstall it from Windows Installed apps; user history is kept unless manually deleted in Settings before uninstalling.
 
 ## Windows verification
 
@@ -64,7 +66,8 @@ Manual smoke test on the Windows machine:
 6. In Settings, send a test notification and switch System/Light/Dark themes.
 7. Set a low app limit and daily goal to verify the soft warning and goal notifications. The app intentionally will not close the limited application.
 8. Export CSV and inspect it, then optionally delete history and confirm settings/limits remain.
-9. Close the dashboard with its X; confirm it hides and the tray tooltip/usage continue updating. Start focus from the tray, reopen the dashboard, then use Quit from the tray to stop. If startup was selected during setup, sign out/in and confirm the dashboard starts.
+9. Close the dashboard with its X; confirm it hides and the tray tooltip/usage continue updating. Launch the app again and confirm the existing dashboard reopens without a second tracker. Start focus from the tray, reopen the dashboard, then use Quit from the tray to stop.
+10. Enable sign-in startup in Settings (or in the installer), sign out/in, and confirm the app starts hidden with no console window. Open it from Start and confirm today's usage accumulated since sign-in.
 
 ## Linux
 

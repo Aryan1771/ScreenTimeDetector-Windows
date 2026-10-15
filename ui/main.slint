@@ -47,6 +47,8 @@ export component AppWindow inherits Window {
     in-out property <string> focus-text: "No focus session";
     in-out property <bool> tracking: true;
     in-out property <bool> focus-active: false;
+    in-out property <bool> startup-enabled: false;
+    in-out property <bool> startup-supported: false;
     in-out property <[UsageItem]> usages;
     callback navigate(string);
     callback toggle-tracking();
@@ -61,6 +63,7 @@ export component AppWindow inherits Window {
     callback test-notification();
     callback clear-history();
     callback set-theme(string);
+    callback set-startup-enabled(bool);
 
     Rectangle {
         background: root.canvas;
@@ -187,6 +190,10 @@ export component AppWindow inherits Window {
                         Button { text: root.tracking ? "Pause tracking" : "Resume tracking"; clicked => { root.toggle-tracking(); } }
                         Button { text: "Export usage CSV"; clicked => { root.export-data(); } }
                         Button { text: "Send test Windows notification"; clicked => { root.test-notification(); } }
+                        Rectangle { height: 96px; background: root.surface; border-radius: 12px; border-width: 1px; border-color: root.borders; VerticalLayout { padding: 18px; spacing: 8px;
+                            CheckBox { text: "Open in background when I sign in"; checked: root.startup-enabled; enabled: root.startup-supported; toggled => { root.set-startup-enabled(self.checked); } }
+                            Text { text: root.startup-supported ? "Starts tracking after you sign in and stays in the system tray. Open Digital Wellbeing any time to see today's total." : "Sign-in startup is available in the Windows version."; color: root.text-muted; wrap: word-wrap; }
+                        } }
                         Text { text: "Theme · " + root.theme-mode; color: root.text-primary; font-size: 17px; font-weight: 600; }
                         HorizontalLayout { spacing: 8px; Button { text: "System"; clicked => { root.set-theme("system"); } } Button { text: "Light"; clicked => { root.set-theme("light"); } } Button { text: "Dark"; clicked => { root.set-theme("dark"); } } }
                         Text { text: "Notifications work after installing the app so Windows can associate them with its Start menu shortcut."; color: root.text-muted; wrap: word-wrap; }

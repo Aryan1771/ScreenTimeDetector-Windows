@@ -20,7 +20,7 @@ UninstallDisplayIcon={app}\digital-wellbeing.exe
 LicenseFile=..\..\LICENSE
 
 [Tasks]
-Name: "autostart"; Description: "Start Digital Wellbeing when I sign in"; GroupDescription: "Optional settings:"; Flags: unchecked
+Name: "autostart"; Description: "Start Digital Wellbeing when I sign in"; GroupDescription: "Startup:"
 
 [Files]
 Source: "..\..\target\release\digital-wellbeing.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -30,7 +30,10 @@ Name: "{group}\Digital Wellbeing"; Filename: "{app}\digital-wellbeing.exe"; Work
 Name: "{group}\Uninstall Digital Wellbeing"; Filename: "{uninstallexe}"
 
 [Registry]
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "DigitalWellbeing"; ValueData: """{app}\digital-wellbeing.exe"""; Tasks: autostart; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "DigitalWellbeing"; ValueData: """{app}\digital-wellbeing.exe"" --background"; Tasks: autostart; Flags: uninsdeletevalue
 
 [Run]
 Filename: "{app}\digital-wellbeing.exe"; Description: "Launch Digital Wellbeing"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+Filename: "{sys}\reg.exe"; Parameters: "delete ""HKCU\Software\Microsoft\Windows\CurrentVersion\Run"" /v ""DigitalWellbeing"" /f"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveDigitalWellbeingStartup"

@@ -11,6 +11,7 @@ pub enum Action {
     Quit,
 }
 
+#[derive(Clone)]
 pub struct Tray {
     icon: TrayIcon,
     open_id: tray_icon::menu::MenuId,
