@@ -9,6 +9,7 @@ description = "Private, local-first desktop screen-time tracker"
 chrono = { version = "0.4", features = ["serde"] }
 directories = "6"
 rusqlite = { version = "0.38", features = ["bundled"] }
+serde_json = "1"
 slint = "1.18"
 sysinfo = "0.38"
 

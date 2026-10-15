@@ -1,0 +1,9 @@
+{
+  "name": "com.digitalwellbeing.browser_bridge",
+  "description": "Digital Wellbeing local website usage bridge",
+  "path": "digital-wellbeing.exe",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://mafmhbdjfjllohclegecbcnonbgkakgl/"
+  ]
+}

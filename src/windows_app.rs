@@ -36,12 +36,47 @@ unsafe extern "system" {
     fn ShowWindow(window: *mut c_void, command: i32) -> i32;
 }
 
+#[link(name = "shell32")]
+unsafe extern "system" {
+    fn ShellExecuteW(
+        window: *mut c_void,
+        operation: *const u16,
+        file: *const u16,
+        parameters: *const u16,
+        directory: *const u16,
+        show_command: i32,
+    ) -> *mut c_void;
+}
+
 pub fn hide_dashboard_window() {
     unsafe {
         EnumWindows(
             Some(hide_process_window),
             std::process::id() as usize as *mut c_void,
         );
+    }
+}
+
+pub fn open_notification_settings() -> Result<(), String> {
+    let operation = wide("open");
+    let uri = wide("ms-settings:notifications");
+    let result = unsafe {
+        ShellExecuteW(
+            ptr::null_mut(),
+            operation.as_ptr(),
+            uri.as_ptr(),
+            ptr::null(),
+            ptr::null(),
+            1,
+        )
+    };
+    if result as usize > 32 {
+        Ok(())
+    } else {
+        Err(format!(
+            "Could not open Windows notification settings ({})",
+            result as usize
+        ))
     }
 }
 

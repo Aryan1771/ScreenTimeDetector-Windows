@@ -24,6 +24,8 @@ Name: "autostart"; Description: "Start Digital Wellbeing when I sign in"; GroupD
 
 [Files]
 Source: "..\..\target\release\digital-wellbeing.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\browser\chromium\*"; DestDir: "{app}\browser\chromium"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "browser-bridge-manifest.json"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Digital Wellbeing"; Filename: "{app}\digital-wellbeing.exe"; WorkingDir: "{app}"; AppUserModelID: "{#ProductAppId}"
@@ -31,9 +33,14 @@ Name: "{group}\Uninstall Digital Wellbeing"; Filename: "{uninstallexe}"
 
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "DigitalWellbeing"; ValueData: """{app}\digital-wellbeing.exe"" --background"; Tasks: autostart; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Google\Chrome\NativeMessagingHosts\com.digitalwellbeing.browser_bridge"; ValueType: string; ValueName: ""; ValueData: "{app}\browser-bridge-manifest.json"; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Microsoft\Edge\NativeMessagingHosts\com.digitalwellbeing.browser_bridge"; ValueType: string; ValueName: ""; ValueData: "{app}\browser-bridge-manifest.json"; Flags: uninsdeletevalue
 
 [Run]
 Filename: "{app}\digital-wellbeing.exe"; Description: "Launch Digital Wellbeing"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 Filename: "{sys}\reg.exe"; Parameters: "delete ""HKCU\Software\Microsoft\Windows\CurrentVersion\Run"" /v ""DigitalWellbeing"" /f"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveDigitalWellbeingStartup"
+
+[UninstallDelete]
+Type: files; Name: "{app}\browser-bridge-manifest.json"

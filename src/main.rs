@@ -1,5 +1,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+#[cfg(windows)]
+mod browser_bridge;
 mod notifications;
 mod platform;
 mod storage;
@@ -14,6 +16,9 @@ mod windows_app {
     }
     pub fn set_startup_enabled(_enabled: bool) -> Result<(), String> {
         Err("Sign-in startup is only available on Windows.".into())
+    }
+    pub fn open_notification_settings() -> Result<(), String> {
+        Err("Windows notification settings are only available on Windows.".into())
     }
 }
 
@@ -41,11 +46,25 @@ struct FocusSession {
     remaining: Duration,
 }
 
+#[derive(Clone, Copy)]
+struct QuietHours {
+    enabled: bool,
+    start_hour: u32,
+    end_hour: u32,
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut background_start = false;
     let mut data_dir_override = None;
+    #[cfg(windows)]
+    let mut native_messaging_host = false;
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
+        #[cfg(windows)]
+        if browser_bridge::is_host_argument(&arg) {
+            native_messaging_host = true;
+            continue;
+        }
         if arg == "--background" {
             background_start = true;
         } else if arg == "--data-dir" {
@@ -56,6 +75,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         {
             data_dir_override = Some(PathBuf::from(path));
         }
+    }
+    #[cfg(windows)]
+    if native_messaging_host {
+        return browser_bridge::run(data_dir_override);
     }
     #[cfg(windows)]
     let instance_guard = {
@@ -78,6 +101,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .parse()
             .unwrap_or(45),
     ));
+    let quiet_hours = Arc::new(std::sync::Mutex::new(QuietHours {
+        enabled: db.preference("quiet_hours_enabled", "false")? == "true",
+        start_hour: db
+            .preference("quiet_hours_start", "22")?
+            .parse::<u32>()
+            .unwrap_or(22)
+            .min(23),
+        end_hour: db
+            .preference("quiet_hours_end", "7")?
+            .parse::<u32>()
+            .unwrap_or(7)
+            .min(23),
+    }));
     let selected_day = Arc::new(std::sync::Mutex::new(Local::now().date_naive()));
     let focus = Arc::new(std::sync::Mutex::new(None::<FocusSession>));
     let (alert_tx, alert_rx) = mpsc::channel::<(String, String)>();
@@ -124,18 +160,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into(),
     );
     window.set_usages(ModelRc::new(VecModel::from(Vec::<UsageItem>::new())));
+    window.set_websites(ModelRc::new(VecModel::from(Vec::<WebsiteItem>::new())));
     window.set_hourly_bars(ModelRc::new(VecModel::from(Vec::<ChartItem>::new())));
     window.set_weekly_bars(ModelRc::new(VecModel::from(Vec::<ChartItem>::new())));
+    window.set_monthly_bars(ModelRc::new(VecModel::from(Vec::<ChartItem>::new())));
     let initial_day = Local::now().date_naive();
     window.set_date_label(format_day(initial_day).into());
     if let Ok((total, _)) = db.summary_for_day(&initial_day) {
         window.set_today_total(format_duration(total).into());
     }
+    window.set_websites(ModelRc::new(VecModel::from(website_items(
+        &db,
+        &initial_day,
+    ))));
     window.set_startup_supported(cfg!(windows));
     window.set_startup_enabled(windows_app::startup_enabled());
-    if let Err(error) = notification_setup {
-        window.set_notice_text(format!("Windows notifications unavailable: {error}").into());
+    if let Ok(quiet) = quiet_hours.lock() {
+        window.set_quiet_hours_enabled(quiet.enabled);
+        window.set_quiet_start_hour(quiet.start_hour as i32);
+        window.set_quiet_end_hour(quiet.end_hour as i32);
     }
+    // Toast registration can fail because Windows notification services are
+    // unavailable for this user/session. Keep that platform diagnostic out of
+    // the dashboard; the rest of the tracker remains usable.
+    let _notifications_registered = notification_setup.is_ok();
 
     {
         let weak = window.as_weak();
@@ -158,6 +206,61 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         w.set_notice_text(error.into());
                     }
                 }
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let schedule = quiet_hours.clone();
+        let path = db_path.clone();
+        window.on_set_quiet_hours_enabled(move |enabled| {
+            if let Ok(mut quiet) = schedule.lock() {
+                quiet.enabled = enabled;
+            }
+            if let Ok(db) = storage::Database::open(&path) {
+                let _ = db.set_preference(
+                    "quiet_hours_enabled",
+                    if enabled { "true" } else { "false" },
+                );
+            }
+            if let Some(window) = weak.upgrade() {
+                window.set_quiet_hours_enabled(enabled);
+            }
+        });
+    }
+    {
+        let schedule = quiet_hours.clone();
+        let path = db_path.clone();
+        window.on_set_quiet_start_hour(move |hour| {
+            let hour = hour.clamp(0, 23) as u32;
+            if let Ok(mut quiet) = schedule.lock() {
+                quiet.start_hour = hour;
+            }
+            if let Ok(db) = storage::Database::open(&path) {
+                let _ = db.set_preference("quiet_hours_start", &hour.to_string());
+            }
+        });
+    }
+    {
+        let schedule = quiet_hours.clone();
+        let path = db_path.clone();
+        window.on_set_quiet_end_hour(move |hour| {
+            let hour = hour.clamp(0, 23) as u32;
+            if let Ok(mut quiet) = schedule.lock() {
+                quiet.end_hour = hour;
+            }
+            if let Ok(db) = storage::Database::open(&path) {
+                let _ = db.set_preference("quiet_hours_end", &hour.to_string());
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.on_open_notification_settings(move || {
+            if let Err(error) = windows_app::open_notification_settings()
+                && let Some(window) = weak.upgrade()
+            {
+                window.set_notice_text(error.into());
             }
         });
     }
@@ -194,6 +297,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 *selected_day = next.min(today);
                 if let Some(window) = weak.upgrade() {
                     window.set_date_label(format_day(*selected_day).into());
+                }
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let selected = selected_day.clone();
+        window.on_select_date(move |date| {
+            let Ok(date) = NaiveDate::parse_from_str(date.as_str(), "%Y-%m-%d") else {
+                return;
+            };
+            let today = Local::now().date_naive();
+            if date <= today {
+                if let Ok(mut selected_day) = selected.lock() {
+                    *selected_day = date;
+                    if let Some(window) = weak.upgrade() {
+                        window.set_date_label(format_day(date).into());
+                    }
                 }
             }
         });
@@ -318,12 +439,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
     {
-        let sender = alert_tx.clone();
+        let weak = window.as_weak();
         window.on_test_notification(move || {
-            let _ = sender.send((
-                "Digital Wellbeing".into(),
-                "Windows notification test succeeded.".into(),
-            ));
+            let result = notifications::toast(
+                "Digital Wellbeing",
+                "Windows notification test succeeded.",
+            );
+            if let Some(w) = weak.upgrade() {
+                w.set_notice_text(if result.is_ok() {
+                    "Test notification sent.".into()
+                } else {
+                    "Windows notifications are unavailable right now. Check Windows notification settings and try again.".into()
+                });
+            }
         });
     }
     {
@@ -386,6 +514,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let focus_state = focus.clone();
     let day_state = selected_day.clone();
     let alert_rx = alert_rx;
+    let notification_quiet_hours = quiet_hours.clone();
     #[cfg(windows)]
     let tray_tracking = tracking.clone();
     #[cfg(windows)]
@@ -486,9 +615,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         while let Ok((title, body)) = alert_rx.try_recv() {
-            match notifications::toast(&title, &body) {
-                Ok(()) => w.set_notice_text(format!("Notification: {body}").into()),
-                Err(error) => w.set_notice_text(format!("Notification failed: {error}").into()),
+            let quiet = notification_quiet_hours
+                .lock()
+                .map(|schedule| is_quiet_hour(*schedule, Local::now().hour()))
+                .unwrap_or(false);
+            if quiet {
+                continue;
+            }
+            // Background reminders should never surface OS-level toast errors
+            // as dashboard banners. A failed toast must not interrupt tracking.
+            if notifications::toast(&title, &body).is_ok() {
+                w.set_notice_text(format!("Reminder sent: {body}").into());
             }
         }
         let day = *day_state
@@ -496,6 +633,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         w.set_date_label(format_day(day).into());
         if let Ok(db) = storage::Database::open(&refresh_path) {
+            w.set_websites(ModelRc::new(VecModel::from(website_items(&db, &day))));
             if let Ok((total, rows)) = db.summary_for_day(&day) {
                 w.set_today_total(format_duration(total).into());
                 #[cfg(windows)]
@@ -547,6 +685,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             (seconds * 100 / max).clamp(2, 100) as i32
                         },
                         value: format_duration(seconds).into(),
+                        day_key: "".into(),
                     })
                     .collect::<Vec<_>>();
                 w.set_hourly_bars(ModelRc::new(VecModel::from(bars)));
@@ -568,10 +707,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             (seconds * 100 / max).clamp(2, 100) as i32
                         },
                         value: format_duration(seconds).into(),
+                        day_key: date.format("%Y-%m-%d").to_string().into(),
                     })
                     .collect::<Vec<_>>();
                 w.set_weekly_bars(ModelRc::new(VecModel::from(bars)));
             }
+            if let Ok(days) = db.month_summary(&day) {
+                let max = days
+                    .iter()
+                    .map(|(_, seconds)| *seconds)
+                    .max()
+                    .unwrap_or(1)
+                    .max(1);
+                let bars = days
+                    .into_iter()
+                    .map(|(date, seconds)| ChartItem {
+                        label: date.format("%d").to_string().into(),
+                        share: if seconds == 0 {
+                            0
+                        } else {
+                            (seconds * 100 / max).clamp(2, 100) as i32
+                        },
+                        value: format_duration(seconds).into(),
+                        day_key: date.format("%Y-%m-%d").to_string().into(),
+                    })
+                    .collect::<Vec<_>>();
+                w.set_monthly_bars(ModelRc::new(VecModel::from(bars)));
+            }
+            let comparison = match db.weekly_comparison_percent(&day) {
+                Ok(Some(percent)) if percent > 0 => {
+                    format!("Screen time increased by {percent}% compared with the previous seven days.")
+                }
+                Ok(Some(percent)) if percent < 0 => format!(
+                    "Screen time decreased by {}% compared with the previous seven days.",
+                    percent.abs()
+                ),
+                Ok(Some(_)) => "Screen time matched the previous seven days.".into(),
+                _ => "More recorded history is needed. A comparison appears after at least three recorded days in each week.".into(),
+            };
+            w.set_weekly_comparison(comparison.into());
             if let Ok(count) = db.completed_focus_count() {
                 w.set_focus_count(format!("{count} completed this week").into());
             }
@@ -752,6 +926,40 @@ fn format_day(day: NaiveDate) -> String {
     }
 }
 
+fn is_quiet_hour(schedule: QuietHours, hour: u32) -> bool {
+    if !schedule.enabled {
+        return false;
+    }
+    let hour = hour % 24;
+    let start = schedule.start_hour % 24;
+    let end = schedule.end_hour % 24;
+    if start == end {
+        true
+    } else if start < end {
+        (start..end).contains(&hour)
+    } else {
+        hour >= start || hour < end
+    }
+}
+
+fn website_items(db: &storage::Database, day: &NaiveDate) -> Vec<WebsiteItem> {
+    let websites = db.website_summary_for_day(day).unwrap_or_default();
+    let max = websites
+        .iter()
+        .map(|(_, seconds)| *seconds)
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    websites
+        .into_iter()
+        .map(|(domain, seconds)| WebsiteItem {
+            domain: domain.into(),
+            duration: format_duration(seconds).into(),
+            share: (seconds * 100 / max).clamp(3, 100) as i32,
+        })
+        .collect()
+}
+
 fn format_duration(seconds: i64) -> String {
     if seconds >= 3600 {
         format!("{}h {:02}m", seconds / 3600, (seconds % 3600) / 60)
@@ -759,5 +967,42 @@ fn format_duration(seconds: i64) -> String {
         format!("{}m", seconds / 60)
     } else {
         format!("{}s", seconds)
+    }
+}
+
+#[cfg(test)]
+mod schedule_tests {
+    use super::*;
+
+    #[test]
+    fn quiet_hours_support_overnight_ranges_and_disable_cleanly() {
+        let overnight = QuietHours {
+            enabled: true,
+            start_hour: 22,
+            end_hour: 7,
+        };
+        assert!(!is_quiet_hour(overnight, 21));
+        assert!(is_quiet_hour(overnight, 22));
+        assert!(is_quiet_hour(overnight, 6));
+        assert!(!is_quiet_hour(overnight, 7));
+        assert!(!is_quiet_hour(
+            QuietHours {
+                enabled: false,
+                ..overnight
+            },
+            23
+        ));
+    }
+
+    #[test]
+    fn equal_quiet_hours_mean_all_day() {
+        assert!(is_quiet_hour(
+            QuietHours {
+                enabled: true,
+                start_hour: 9,
+                end_hour: 9,
+            },
+            4
+        ));
     }
 }

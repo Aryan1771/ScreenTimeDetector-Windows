@@ -16,6 +16,7 @@ impl Database {
             CREATE TABLE IF NOT EXISTS preferences (key TEXT PRIMARY KEY, value TEXT NOT NULL);\
             CREATE TABLE IF NOT EXISTS hourly_usage (day TEXT NOT NULL, hour INTEGER NOT NULL CHECK(hour BETWEEN 0 AND 23), app_id TEXT NOT NULL REFERENCES applications(id), active_seconds INTEGER NOT NULL DEFAULT 0 CHECK(active_seconds >= 0), PRIMARY KEY(day,hour,app_id));\
             CREATE TABLE IF NOT EXISTS app_limits (app_id TEXT PRIMARY KEY REFERENCES applications(id), daily_minutes INTEGER NOT NULL CHECK(daily_minutes BETWEEN 5 AND 1440));\
+            CREATE TABLE IF NOT EXISTS website_usage (day TEXT NOT NULL, hour INTEGER NOT NULL CHECK(hour BETWEEN 0 AND 23), domain TEXT NOT NULL, active_seconds INTEGER NOT NULL DEFAULT 0 CHECK(active_seconds >= 0), PRIMARY KEY(day,hour,domain));\
             CREATE TABLE IF NOT EXISTS focus_sessions (id INTEGER PRIMARY KEY, started_at TEXT NOT NULL, ended_at TEXT, status TEXT NOT NULL, planned_minutes INTEGER NOT NULL);\
             CREATE INDEX IF NOT EXISTS idx_daily_usage_day ON daily_usage(day);")?;
         Ok(Self { conn })
@@ -37,6 +38,33 @@ impl Database {
         tx.execute("INSERT INTO daily_usage(day,app_id,active_seconds) VALUES(?1,?2,?3) ON CONFLICT(day,app_id) DO UPDATE SET active_seconds=active_seconds+excluded.active_seconds", params![day.to_string(), id, seconds])?;
         tx.execute("INSERT INTO hourly_usage(day,hour,app_id,active_seconds) VALUES(?1,?2,?3,?4) ON CONFLICT(day,hour,app_id) DO UPDATE SET active_seconds=active_seconds+excluded.active_seconds", params![day.to_string(), hour, id, seconds])?;
         tx.commit()
+    }
+
+    pub fn add_website_usage(
+        &self,
+        day: &NaiveDate,
+        hour: u32,
+        domain: &str,
+        seconds: i64,
+    ) -> rusqlite::Result<()> {
+        if seconds <= 0 {
+            return Ok(());
+        }
+        self.conn.execute(
+            "INSERT INTO website_usage(day,hour,domain,active_seconds) VALUES(?1,?2,?3,?4) ON CONFLICT(day,hour,domain) DO UPDATE SET active_seconds=active_seconds+excluded.active_seconds",
+            params![day.to_string(), hour, domain, seconds],
+        )?;
+        Ok(())
+    }
+
+    pub fn website_summary_for_day(&self, day: &NaiveDate) -> rusqlite::Result<Vec<(String, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT domain,SUM(active_seconds) FROM website_usage WHERE day=?1 GROUP BY domain ORDER BY SUM(active_seconds) DESC,domain COLLATE NOCASE ASC",
+        )?;
+        stmt.query_map([day.to_string()], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?
+        .collect()
     }
 
     pub fn summary_for_day(
@@ -68,8 +96,20 @@ impl Database {
     }
 
     pub fn week_summary(&self, end_day: &NaiveDate) -> rusqlite::Result<Vec<(NaiveDate, i64)>> {
-        let start = *end_day - chrono::Duration::days(6);
-        let mut out = (0..7)
+        self.period_summary(end_day, 7)
+    }
+
+    pub fn month_summary(&self, end_day: &NaiveDate) -> rusqlite::Result<Vec<(NaiveDate, i64)>> {
+        self.period_summary(end_day, 30)
+    }
+
+    fn period_summary(
+        &self,
+        end_day: &NaiveDate,
+        days: i64,
+    ) -> rusqlite::Result<Vec<(NaiveDate, i64)>> {
+        let start = *end_day - chrono::Duration::days(days - 1);
+        let mut out = (0..days)
             .map(|offset| (start + chrono::Duration::days(offset), 0_i64))
             .collect::<Vec<_>>();
         let mut stmt = self.conn.prepare("SELECT day,SUM(active_seconds) FROM daily_usage WHERE day BETWEEN ?1 AND ?2 GROUP BY day")?;
@@ -87,10 +127,33 @@ impl Database {
         Ok(out)
     }
 
+    pub fn weekly_comparison_percent(&self, end_day: &NaiveDate) -> rusqlite::Result<Option<i64>> {
+        let current_start = *end_day - chrono::Duration::days(6);
+        let previous_end = current_start - chrono::Duration::days(1);
+        let previous_start = previous_end - chrono::Duration::days(6);
+        let query = "SELECT COALESCE(SUM(active_seconds),0),COUNT(DISTINCT day) FROM daily_usage WHERE day BETWEEN ?1 AND ?2";
+        let (current_total, current_days): (i64, i64) = self.conn.query_row(
+            query,
+            params![current_start.to_string(), end_day.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let (previous_total, previous_days): (i64, i64) = self.conn.query_row(
+            query,
+            params![previous_start.to_string(), previous_end.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        if current_days < 3 || previous_days < 3 || previous_total == 0 {
+            return Ok(None);
+        }
+        Ok(Some(
+            (current_total - previous_total) * 100 / previous_total,
+        ))
+    }
+
     pub fn export_csv(&self, path: &Path) -> std::io::Result<()> {
         let mut file = std::fs::File::create(path)?;
         use std::io::Write;
-        writeln!(file, "date,application,active_seconds")?;
+        writeln!(file, "date,category,application_or_domain,active_seconds")?;
         let mut stmt = self.conn.prepare("SELECT u.day,a.display_name,u.active_seconds FROM daily_usage u JOIN applications a ON a.id=u.app_id ORDER BY u.day DESC,u.active_seconds DESC").map_err(std::io::Error::other)?;
         let rows = stmt
             .query_map([], |r| {
@@ -103,7 +166,29 @@ impl Database {
             .map_err(std::io::Error::other)?;
         for row in rows {
             let (day, name, seconds) = row.map_err(std::io::Error::other)?;
-            writeln!(file, "{day},\"{}\",{seconds}", name.replace('"', "\"\""))?;
+            writeln!(
+                file,
+                "{day},application,\"{}\",{seconds}",
+                name.replace('"', "\"\"")
+            )?;
+        }
+        let mut stmt = self.conn.prepare("SELECT day,domain,SUM(active_seconds) FROM website_usage GROUP BY day,domain ORDER BY day DESC,SUM(active_seconds) DESC,domain COLLATE NOCASE ASC").map_err(std::io::Error::other)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(std::io::Error::other)?;
+        for row in rows {
+            let (day, domain, seconds) = row.map_err(std::io::Error::other)?;
+            writeln!(
+                file,
+                "{day},website,\"{}\",{seconds}",
+                domain.replace('"', "\"\"")
+            )?;
         }
         Ok(())
     }
@@ -212,7 +297,7 @@ impl Database {
     pub fn clear_history(&self) -> rusqlite::Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute_batch(
-            "DELETE FROM daily_usage; DELETE FROM hourly_usage; DELETE FROM focus_sessions; DELETE FROM applications WHERE id NOT IN (SELECT app_id FROM app_limits);",
+            "DELETE FROM daily_usage; DELETE FROM hourly_usage; DELETE FROM website_usage; DELETE FROM focus_sessions; DELETE FROM applications WHERE id NOT IN (SELECT app_id FROM app_limits);",
         )?;
         tx.commit()
     }
@@ -273,6 +358,41 @@ mod tests {
         );
         assert_eq!(db.app_limit("editor.exe").unwrap(), Some(5));
         assert_eq!(db.preference("theme_mode", "system").unwrap(), "dark");
+    }
+
+    #[test]
+    fn website_usage_aggregates_by_domain_without_url_data() {
+        let db = memory_db();
+        let day = NaiveDate::from_ymd_opt(2026, 10, 15).unwrap();
+        db.add_website_usage(&day, 9, "example.com", 20).unwrap();
+        db.add_website_usage(&day, 10, "example.com", 30).unwrap();
+        db.add_website_usage(&day, 10, "docs.example.org", 30)
+            .unwrap();
+        assert_eq!(
+            db.website_summary_for_day(&day).unwrap(),
+            vec![("example.com".into(), 50), ("docs.example.org".into(), 30)]
+        );
+    }
+
+    #[test]
+    fn monthly_history_and_week_comparisons_require_recorded_data() {
+        let db = memory_db();
+        let end = NaiveDate::from_ymd_opt(2026, 10, 15).unwrap();
+        let month = db.month_summary(&end).unwrap();
+        assert_eq!(month.len(), 30);
+        assert_eq!(month.first().unwrap().0, end - chrono::Duration::days(29));
+        assert_eq!(month.last().unwrap().0, end);
+        assert_eq!(db.weekly_comparison_percent(&end).unwrap(), None);
+
+        for offset in [1, 2, 3] {
+            let day = end - chrono::Duration::days(7 + offset);
+            db.add_usage(&day, "app.exe", "App", 12, 100).unwrap();
+        }
+        for offset in [1, 2, 3] {
+            let day = end - chrono::Duration::days(offset);
+            db.add_usage(&day, "app.exe", "App", 12, 150).unwrap();
+        }
+        assert_eq!(db.weekly_comparison_percent(&end).unwrap(), Some(50));
     }
 
     #[test]

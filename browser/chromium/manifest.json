@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Digital Wellbeing Website Tracker",
+  "version": "0.2.0",
+  "description": "Counts active website time locally for Digital Wellbeing. It does not save full URLs or collect private-window activity.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4EwCHKIIzmrtSCynzDQ7+QsuGpF3Mkbe8p5AzoCXXe3ewryZ6OpxE+Zw09kcoLx4xjXdne78/0C8yeHmMMDs4ObyCxN/ZFrGwBEo6YXJYVLH0KX9OYU9MSs8WTseZNK9g8qfrj1agmtH6tp18dimxzIreJ5sHKQAHoUMGdK9CACjzZmDphdHT2v3nFyxJ5T5rfOqvmJvQ1+Syk0+DHNrSveNKWw2TDE/J0vhkmXiNbVuFui35TDOldlTD313+qQbd+wQx+/Y5j53YXn73by3nUP+GAURi0l3wIYSP/1X6pcAjoWnwGJgOmxaWYp13cVbMx8Qy2PorPVZzDIkbnCJtQIDAQAB",
+  "permissions": [
+    "idle",
+    "nativeMessaging",
+    "tabs"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  }
+}

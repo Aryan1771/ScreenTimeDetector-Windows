@@ -12,6 +12,12 @@ export struct ChartItem {
     label: string,
     share: int,
     value: string,
+    day-key: string,
+}
+export struct WebsiteItem {
+    domain: string,
+    duration: string,
+    share: int,
 }
 
 export component AppWindow inherits Window {
@@ -43,19 +49,26 @@ export component AppWindow inherits Window {
     in-out property <string> date-label: "Today";
     in-out property <[ChartItem]> hourly-bars;
     in-out property <[ChartItem]> weekly-bars;
+    in-out property <[ChartItem]> monthly-bars;
+    in-out property <string> weekly-comparison: "More recorded days are needed for a comparison.";
     in-out property <string> status-text: "Tracking is active";
     in-out property <string> focus-text: "No focus session";
     in-out property <bool> tracking: true;
     in-out property <bool> focus-active: false;
     in-out property <bool> startup-enabled: false;
     in-out property <bool> startup-supported: false;
+    in-out property <bool> quiet-hours-enabled: false;
+    in-out property <int> quiet-start-hour: 22;
+    in-out property <int> quiet-end-hour: 7;
     in-out property <[UsageItem]> usages;
+    in-out property <[WebsiteItem]> websites;
     callback navigate(string);
     callback toggle-tracking();
     callback toggle-focus();
     callback export-data();
     callback set-goal(int);
     callback navigate-day(int);
+    callback select-date(string);
     callback stop-focus();
     callback set-break-minutes(int);
     callback change-app-limit(string);
@@ -64,6 +77,10 @@ export component AppWindow inherits Window {
     callback clear-history();
     callback set-theme(string);
     callback set-startup-enabled(bool);
+    callback set-quiet-hours-enabled(bool);
+    callback set-quiet-start-hour(int);
+    callback set-quiet-end-hour(int);
+    callback open-notification-settings();
 
     Rectangle {
         background: root.canvas;
@@ -142,6 +159,21 @@ export component AppWindow inherits Window {
                                 }
                             }
                         }
+                        Rectangle {
+                            height: 170px; background: root.surface; border-radius: 16px; border-width: 1px; border-color: root.borders;
+                            VerticalLayout { padding: 18px; spacing: 10px;
+                                Text { text: "Usage by website"; color: root.text-primary; font-size: 16px; font-weight: 600; }
+                                if root.websites.length == 0: Text { text: "Install the optional Chromium extension to see domain-only usage. Private windows are excluded."; color: root.text-muted; vertical-alignment: center; wrap: word-wrap; }
+                                for website in root.websites: HorizontalLayout {
+                                    spacing: 12px; height: 26px;
+                                    Text { width: 200px; text: website.domain; color: root.text-primary; vertical-alignment: center; overflow: elide; }
+                                    Rectangle { height: 8px; background: root.borders; border-radius: 4px;
+                                        Rectangle { width: parent.width * website.share / 100; height: parent.height; background: root.secondary; border-radius: 4px; }
+                                    }
+                                    Text { width: 70px; text: website.duration; color: root.text-muted; vertical-alignment: center; horizontal-alignment: right; }
+                                }
+                            }
+                        }
                         HorizontalLayout {
                             spacing: 16px;
                             Rectangle { height: 180px; background: root.surface; border-radius: 14px; border-width: 1px; border-color: root.borders;
@@ -162,31 +194,56 @@ export component AppWindow inherits Window {
                     if root.page == "Reduce interruptions": VerticalLayout {
                         spacing: 14px;
                         Text { text: "System notifications remain under your operating system's control."; color: root.text-muted; }
-                        Rectangle { height: 110px; background: root.surface; border-radius: 12px; border-width: 1px; border-color: root.borders; VerticalLayout { padding: 18px; spacing: 8px; Text { text: "Quiet hours and Do Not Disturb"; color: root.text-primary; font-size: 17px; font-weight: 600; } Text { text: "This app does not change system-wide notification settings. Use Windows Settings or your Linux desktop's notification controls."; color: root.text-muted; wrap: word-wrap; } } }
+                        Rectangle { height: 260px; background: root.surface; border-radius: 12px; border-width: 1px; border-color: root.borders; VerticalLayout { padding: 18px; spacing: 8px;
+                            Text { text: "Quiet hours for Digital Wellbeing"; color: root.text-primary; font-size: 17px; font-weight: 600; }
+                            CheckBox { text: "Mute this app's reminder toasts during quiet hours"; checked: root.quiet-hours-enabled; toggled => { root.set-quiet-hours-enabled(self.checked); } }
+                            Text { text: "This schedule only suppresses Digital Wellbeing reminders. It does not change Windows Do Not Disturb or other apps' notifications."; color: root.text-muted; wrap: word-wrap; }
+                            HorizontalLayout { spacing: 12px; Text { text: "Start · " + root.quiet-start-hour + ":00"; color: root.text-primary; vertical-alignment: center; } Slider { minimum: 0; maximum: 23; value: root.quiet-start-hour; changed => { root.quiet-start-hour = self.value; root.set-quiet-start-hour(self.value); } } }
+                            HorizontalLayout { spacing: 12px; Text { text: "End · " + root.quiet-end-hour + ":00"; color: root.text-primary; vertical-alignment: center; } Slider { minimum: 0; maximum: 23; value: root.quiet-end-hour; changed => { root.quiet-end-hour = self.value; root.set-quiet-end-hour(self.value); } } }
+                            Text { text: "If start and end match, quiet hours last all day."; color: root.text-muted; font-size: 11px; }
+                        } }
+                        Rectangle { height: 105px; background: root.surface; border-radius: 12px; border-width: 1px; border-color: root.borders; VerticalLayout { padding: 18px; spacing: 8px; Text { text: "Windows notification controls"; color: root.text-primary; font-size: 17px; font-weight: 600; } Text { text: "Manage system-wide Do Not Disturb and per-app notification settings in Windows."; color: root.text-muted; wrap: word-wrap; } Button { text: "Open Windows notification settings"; enabled: root.startup-supported; clicked => { root.open-notification-settings(); } } } }
                         Rectangle { height: 90px; background: root.surface; border-radius: 12px; border-width: 1px; border-color: root.borders; VerticalLayout { padding: 18px; spacing: 8px; Text { text: "Heads Up"; color: root.text-primary; font-size: 17px; font-weight: 600; } Text { text: "Break reminders are managed in Ways to disconnect. Windows notification preferences remain under Windows Settings."; color: root.text-muted; wrap: word-wrap; } } }
                     }
                     if root.page == "Insights and history": VerticalLayout {
                         spacing: 14px;
-                        Text { text: "Seven days ending " + root.date-label; color: root.text-muted; }
+                        Text { text: "Historical usage ending " + root.date-label; color: root.text-muted; }
                         Rectangle { height: 220px; background: root.surface; border-radius: 12px; border-width: 1px; border-color: root.borders;
                             VerticalLayout { padding: 18px; spacing: 10px; Text { text: "Daily active time"; color: root.text-primary; font-size: 17px; font-weight: 600; }
                                 HorizontalLayout { height: 150px; spacing: 8px;
-                                    for day in root.weekly-bars: VerticalLayout { width: 72px; height: 150px; spacing: 6px;
+                                    for day in root.weekly-bars: TouchArea { width: 72px; height: 150px; clicked => { root.select-date(day.day-key); }
+                                      VerticalLayout { width: 72px; height: 150px; spacing: 6px;
                                         Rectangle { height: 116px; background: transparent;
                                             Rectangle { x: 0px; y: parent.height - (parent.height * day.share / 100); width: parent.width; height: max(2px, parent.height * day.share / 100); background: root.secondary; border-radius: 4px; }
                                         }
                                         Text { text: day.label; color: root.text-muted; font-size: 11px; horizontal-alignment: center; }
                                         Text { text: day.value; color: root.text-muted; font-size: 10px; horizontal-alignment: center; }
+                                      }
                                     }
                                 }
                             }
                         }
-                        Rectangle { height: 90px; background: root.surface; border-radius: 12px; border-width: 1px; border-color: root.borders; VerticalLayout { padding: 18px; spacing: 8px; Text { text: "No fabricated comparisons"; color: root.text-primary; font-size: 17px; font-weight: 600; } Text { text: "Weekly and monthly insights will appear after sufficient history is recorded."; color: root.text-muted; } } }
+                        Rectangle { height: 90px; background: root.surface; border-radius: 12px; border-width: 1px; border-color: root.borders; VerticalLayout { padding: 18px; spacing: 8px; Text { text: "Week over week"; color: root.text-primary; font-size: 17px; font-weight: 600; } Text { text: root.weekly-comparison; color: root.text-muted; } } }
+                        Rectangle { height: 220px; background: root.surface; border-radius: 12px; border-width: 1px; border-color: root.borders;
+                            VerticalLayout { padding: 18px; spacing: 10px; Text { text: "Daily time · last 30 days"; color: root.text-primary; font-size: 17px; font-weight: 600; }
+                                HorizontalLayout { height: 150px; spacing: 2px;
+                                    for day in root.monthly-bars: TouchArea { width: 30px; height: 150px; clicked => { root.select-date(day.day-key); }
+                                        VerticalLayout { width: 30px; height: 150px; spacing: 5px;
+                                            Rectangle { height: 116px; background: transparent;
+                                                Rectangle { x: 0px; y: parent.height - (parent.height * day.share / 100); width: parent.width; height: max(2px, parent.height * day.share / 100); background: root.accent; border-radius: 3px; }
+                                            }
+                                            Text { text: day.label; color: root.text-muted; font-size: 8px; horizontal-alignment: center; }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         Button { text: "Export all history as CSV"; clicked => { root.export-data(); } }
                     }
                     if root.page == "Settings": VerticalLayout {
                         spacing: 14px;
                         Rectangle { height: 80px; background: root.surface; border-radius: 12px; border-width: 1px; border-color: root.borders; VerticalLayout { padding: 18px; spacing: 8px; Text { text: "Local privacy"; color: root.text-primary; font-size: 17px; font-weight: 600; } Text { text: "Tracking stays on this device. No keystrokes, screenshots, page contents, or telemetry are collected."; color: root.text-muted; wrap: word-wrap; } } }
+                        Rectangle { height: 108px; background: root.surface; border-radius: 12px; border-width: 1px; border-color: root.borders; VerticalLayout { padding: 18px; spacing: 8px; Text { text: "Browser domain tracking"; color: root.text-primary; font-size: 17px; font-weight: 600; } Text { text: "Optional. After installing the app, load the unpacked extension from its browser/chromium folder in Chrome or Edge. It stores active hostnames only; private windows and page contents are excluded."; color: root.text-muted; wrap: word-wrap; } } }
                         Button { text: root.tracking ? "Pause tracking" : "Resume tracking"; clicked => { root.toggle-tracking(); } }
                         Button { text: "Export usage CSV"; clicked => { root.export-data(); } }
                         Button { text: "Send test Windows notification"; clicked => { root.test-notification(); } }

@@ -984,6 +984,7 @@ dependencies = [
  "chrono",
  "directories",
  "rusqlite",
+ "serde_json",
  "slint",
  "slint-build",
  "sysinfo",

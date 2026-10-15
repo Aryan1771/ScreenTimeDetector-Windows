@@ -24,12 +24,14 @@ This is an early Windows release, not yet the complete product vision. The Windo
 | System tray / keep tracking with dashboard hidden | Implemented; tray opens dashboard, starts/resumes a 25-minute focus, toggles tracking, or quits; tooltip shows today's total |
 | One running tracker / fast dashboard reopen | Implemented; a second launch activates the existing process instead of duplicating tracking |
 | Windows console window | Disabled; app launches as a GUI process |
-| Browser domains / uploads / private-window integration | Not implemented |
+| Browser domains | Optional Chromium extension and native bridge for Chrome/Edge; stores active hostnames only after installing the extension |
+| Browser private windows | Website attribution is rejected for incognito/private windows; browser process time remains included in app totals |
+| Firefox, Brave, Opera, Vivaldi website integration | Not validated / not registered by the installer |
 | Bedtime schedules / OS Do Not Disturb | Not implemented |
 | Hard app enforcement | Not implemented; limits are advisory |
 | ARM64 build | Not validated; installer targets x64 |
 
-The application does not collect keystrokes, screenshots, clipboard contents, full URLs, page contents, or telemetry. Application names, local dates, active seconds, preferences, limits, and focus-session records are stored in a per-user SQLite database. The database is not encrypted by the application; rely on Windows account/device encryption for at-rest protection.
+The application does not collect keystrokes, screenshots, clipboard contents, full URLs, page contents, or telemetry. The optional browser extension reads the active tab URL locally, reduces it to a hostname, and sends only the hostname and a short duration sample to the native app. The app independently checks that an allowed browser is the foreground process and that the user is active before it records the sample. Application names, website hostnames, local dates, active seconds, preferences, limits, and focus-session records are stored in a per-user SQLite database. The database is not encrypted by the application; rely on Windows account/device encryption for at-rest protection.
 
 ## Build and run on Windows
 
@@ -54,7 +56,9 @@ The installer is created at `target\installer\DigitalWellbeing-Setup-x64.exe`. I
 
 ## Windows verification
 
-Automated checks cover SQLite aggregation/sorting, app-limit persistence, preference persistence, history deletion scope, and focus-session recovery. They do not replace real-session verification of Win32 foreground/idle/lock behavior or Windows notification delivery.
+Automated checks cover SQLite aggregation/sorting, website domain validation and aggregation, weekly/monthly analytics, app-limit persistence, preference persistence, history deletion scope, and focus-session recovery. The Chromium extension has a Node test for tab changes, hostname-only output, private windows, idle state, and browser focus. They do not replace real-session verification of Win32 foreground/idle/lock behavior or a live Chrome/Edge native-messaging run.
+
+For optional domain-level tracking, install the app, open the browser extensions page, enable Developer mode, and choose Load unpacked with the installed app's browser/chromium folder. Website tracking stays off until this extension is loaded. The installer registers the native bridge for Chrome and Edge. Private/incognito access is not requested, and private tabs are rejected if the setting is later enabled manually.
 
 Manual smoke test on the Windows machine:
 
@@ -68,6 +72,7 @@ Manual smoke test on the Windows machine:
 8. Export CSV and inspect it, then optionally delete history and confirm settings/limits remain.
 9. Close the dashboard with its X; confirm it hides and the tray tooltip/usage continue updating. Launch the app again and confirm the existing dashboard reopens without a second tracker. Start focus from the tray, reopen the dashboard, then use Quit from the tray to stop.
 10. Enable sign-in startup in Settings (or in the installer), sign out/in, and confirm the app starts hidden with no console window. Open it from Start and confirm today's usage accumulated since sign-in.
+11. In Chrome or Edge, load the unpacked extension. Browse a normal site while the browser is focused and confirm the hostname appears. Switch to another app, idle for a minute, open a private window, and visit a file or browser settings page; those periods should not be attributed to a website.
 
 ## Linux
 
