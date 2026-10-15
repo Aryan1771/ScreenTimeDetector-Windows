@@ -1,64 +1,84 @@
 # Digital Wellbeing
 
-Digital Wellbeing is a local-first native desktop application for seeing where active computer time goes. It uses Rust, Slint, and SQLite; it does not wrap a browser in a desktop shell.
+Digital Wellbeing is a local-first native desktop screen-time tracker built with Rust, Slint, and SQLite. The current development focus is Windows 10/11 x64. Linux files remain in the repository but are not being expanded in this Windows-focused release.
 
-> **Current release status: early, functional foundation (0.1.0).** This release records foreground application use while the session is recently active, offers a small dashboard, a local focus timer, a persistent daily target, and CSV export. Several features in the long-term product vision are not implemented; the capability table below is deliberately explicit.
+## Windows status
 
-## Build and run
+This is an early Windows release, not yet the complete product vision. The Windows dashboard, usage database, focus timer, goal and break reminders, app soft limits, theme setting, export, and installer are implemented. The compatibility table below calls out features that still need implementation so they are not mistaken for finished functionality.
 
-Install the Rust stable toolchain and the native build prerequisites for Slint on your platform, then:
+| Feature | Windows status |
+|---|---|
+| Foreground application usage | Implemented; sampled every five seconds |
+| Recent-input idle exclusion | Implemented; usage pauses after 60 seconds idle |
+| Lock screen / secure desktop exclusion | Implemented using the active Windows input desktop |
+| Sleep / long sampling gap recovery | Long gaps are discarded instead of counted as use |
+| Daily, hourly, weekly history | Implemented |
+| Daily goal and 80% / reached reminders | Implemented |
+| App daily limits | Soft warning only; the app is never forcibly terminated |
+| Focus timer | Start, pause/resume, cancel, completion notification, persisted history |
+| Break reminders | Configurable continuous-active-use reminder; can be disabled |
+| System / light / dark theme | Implemented and saved locally |
+| CSV export / delete all history | Implemented |
+| Native Windows notifications | Implemented in the installed build; the Start-menu shortcut registers the notification identity |
+| Windows installer / optional sign-in launch | Inno Setup script provided |
+| System tray / keep tracking with dashboard hidden | Implemented; tray opens dashboard, starts/resumes a 25-minute focus, toggles tracking, or quits; tooltip shows today's total |
+| Browser domains / uploads / private-window integration | Not implemented |
+| Bedtime schedules / OS Do Not Disturb | Not implemented |
+| Hard app enforcement | Not implemented; limits are advisory |
+| ARM64 build | Not validated; installer targets x64 |
 
-```sh
-cargo run --release
+The application does not collect keystrokes, screenshots, clipboard contents, full URLs, page contents, or telemetry. Application names, local dates, active seconds, preferences, limits, and focus-session records are stored in a per-user SQLite database. The database is not encrypted by the application; rely on Windows account/device encryption for at-rest protection.
+
+## Build and run on Windows
+
+Install the stable Rust MSVC toolchain and Visual Studio Build Tools with the C++ desktop workload. From the repository root:
+
+```powershell
+cargo fmt --all -- --check
+cargo test --locked
+cargo build --release --locked
 ```
 
-On Windows, the project targets Windows 10/11 x64 with the MSVC Rust toolchain. `cargo build --release` creates `target/release/digital-wellbeing.exe`. This repo does not yet include an installer or ARM64 validation.
+The portable executable is `target\release\digital-wellbeing.exe`. Keep that process open while tracking. Windows toast notifications from a directly launched portable binary may not be associated with a registered application identity; build and install the setup package for reliable notifications.
 
-On Arch Linux, install the dependencies listed in `packaging/arch/PKGBUILD`, then run `makepkg -si` from that directory. The package installs the binary and desktop launcher. Wayland sessions are unsupported for global foreground tracking in this release; use an X11 session to collect application usage. Do not disable compositor security to use this app.
+To build the installer, install Inno Setup 6, then run:
 
-On Debian-family distributions, build from source using the platform's Rust and native development packages. An AppImage and Debian package are not yet provided.
+```powershell
+cargo build --release --locked
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" packaging\windows\DigitalWellbeing.iss
+```
 
-## What works today
+The installer is created at `target\installer\DigitalWellbeing-Setup-x64.exe`. It installs per-user without administrator rights. The optional startup task launches the dashboard at sign-in. Uninstall it from Windows Installed apps; user history is kept unless manually deleted in Settings before uninstalling.
 
-- **Dashboard:** today's active time and a descending per-application breakdown, refreshed every five seconds.
-- **Tracking:** Windows foreground process detection and recent-input detection through Win32 APIs; Linux X11 foreground-window/PID and idle time through X11 properties and the Screen Saver extension. Samples are recorded every five seconds. Usage while idle for more than 60 seconds is excluded.
-- **Storage:** per-user SQLite database in WAL mode. Data remains on this computer; no telemetry or network connection is used.
-- **Daily goal:** adjustable 15–720 minute target, saved locally.
-- **Focus:** local 25-minute countdown that does not block or kill applications.
-- **Pause/resume:** pauses recording without deleting history.
-- **Export:** CSV written to Downloads (or the home folder when Downloads is unavailable).
-- **Ordering:** apps are ordered by duration, with alphabetical tie-breaking.
+## Windows verification
 
-## Capability matrix
+Automated checks cover SQLite aggregation/sorting, app-limit persistence, preference persistence, history deletion scope, and focus-session recovery. They do not replace real-session verification of Win32 foreground/idle/lock behavior or Windows notification delivery.
 
-| Capability | Windows 10/11 | Linux X11 | Linux Wayland |
-|---|---|---|---|
-| Dashboard / local database | Yes | Yes | Yes |
-| Foreground application time | Yes | Yes | Not available; compositor APIs are intentionally not bypassed |
-| Idle exclusion | Win32 last-input time | XScreenSaver extension | Not available |
-| Per-site browser tracking | Not implemented | Not implemented | Not implemented |
-| Lock/suspend event handling | Not directly subscribed; long-idle intervals are excluded | Long-idle intervals are excluded | Not available |
-| Native notification / tray / login startup | Not implemented | Not implemented | Not implemented |
-| App limits / enforcement / bedtime / DND | Not implemented | Not implemented | Not implemented |
-| History charts / weekly analytics | Not implemented | Not implemented | Not implemented |
+Manual smoke test on the Windows machine:
 
-KDE Plasma Wayland, GNOME Wayland, Hyprland, and Sway do not provide a single portable, unrestricted API for discovering other clients' focused applications. This release therefore reports no app usage on Wayland rather than claiming inaccurate tracking. X11 support depends on an X server exposing `_NET_ACTIVE_WINDOW`, `_NET_WM_PID`, and the XScreenSaver extension.
+1. Install `DigitalWellbeing-Setup-x64.exe`, launch it from Start, and leave it open.
+2. Use a few apps for a few minutes; confirm the foreground app and hourly/day totals update.
+3. Leave input idle for over a minute; confirm the idle period is not added.
+4. Press Win+L for over a minute, unlock, and confirm locked time is not added.
+5. Start a short focus session, pause/resume, then let one complete; check the completion toast and weekly count.
+6. In Settings, send a test notification and switch System/Light/Dark themes.
+7. Set a low app limit and daily goal to verify the soft warning and goal notifications. The app intentionally will not close the limited application.
+8. Export CSV and inspect it, then optionally delete history and confirm settings/limits remain.
+9. Close the dashboard with its X; confirm it hides and the tray tooltip/usage continue updating. Start focus from the tray, reopen the dashboard, then use Quit from the tray to stop. If startup was selected during setup, sign out/in and confirm the dashboard starts.
 
-## Privacy and data
+## Linux
 
-The database is stored in the operating system's per-user application data directory (`%APPDATA%/DigitalWellbeing/DigitalWellbeing/data` on Windows; the XDG data directory on Linux). It stores application executable names, local calendar dates, and accumulated active seconds. It does not collect keystrokes, screenshots, clipboard data, page titles, full URLs, or page contents. Website tracking and browser extensions are not included in this release. Exported CSV may contain application names; keep it private if that matters to you.
+The repository still contains the earlier Linux X11 implementation and Arch packaging. Linux is not the focus of this pass and has not been revalidated against these Windows changes. Wayland global foreground-app tracking remains unavailable; the app does not attempt to bypass compositor security.
 
-Close the app to stop monitoring. Pause tracking from the dashboard to stop adding usage while keeping the app open. There is currently no background service, autostart, data deletion UI, or retention setting.
+## Project structure
 
-## Architecture
-
-- `src/platform.rs`: minimal OS-specific foreground-PID and idle-time adapters.
-- `src/storage.rs`: SQLite schema, WAL configuration, aggregation, preferences, and CSV export.
-- `src/main.rs`: tracker thread and Slint UI integration.
-- `ui/main.slint`: native desktop dashboard.
-- `packaging/arch`: Arch PKGBUILD and desktop launcher.
-
-The monitor is intentionally unprivileged and does not terminate applications. Its X11 and Win32 polling interval is five seconds. It stores one local aggregate per application/day; gaps longer than the idle threshold are excluded. This is an early implementation rather than a tamper-proof or forensic measurement tool.
+- `src/main.rs`: Slint application, monitoring loop, soft reminders, and UI actions.
+- `src/platform.rs`: Windows foreground, idle, secure desktop, and theme access; existing Linux X11 adapter.
+- `src/storage.rs`: SQLite schema, usage aggregation, preferences, limits, focus history, and CSV export.
+- `src/notifications.rs`: native notification registration and delivery.
+- `ui/main.slint`: desktop dashboard and settings UI.
+- `packaging/windows`: per-user Windows installer definition.
+- `packaging/arch`: existing Arch package files (unchanged in this pass).
 
 ## License
 

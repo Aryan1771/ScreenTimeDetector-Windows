@@ -1,9 +1,17 @@
 import { Button, CheckBox, ScrollView, Slider } from "std-widgets.slint";
 
 export struct UsageItem {
+    app-id: string,
     name: string,
     duration: string,
     share: int,
+    limit-minutes: int,
+    limit-label: string,
+}
+export struct ChartItem {
+    label: string,
+    share: int,
+    value: string,
 }
 
 export component AppWindow inherits Window {
@@ -12,13 +20,29 @@ export component AppWindow inherits Window {
     preferred-height: 760px;
     min-width: 900px;
     min-height: 620px;
-    background: #f6f8f5;
+    background: root.canvas;
 
     in-out property <string> page: "Dashboard";
     in-out property <string> today-total: "0m";
     in-out property <string> goal-label: "4 hours";
     in-out property <int> goal-minutes: 240;
+    in-out property <int> break-minutes: 45;
+    in-out property <int> focus-minutes: 25;
+    in-out property <string> focus-count: "0 sessions this week";
+    in-out property <string> notice-text: "";
+    in-out property <bool> confirm-clear: false;
+    in-out property <bool> dark-theme: false;
+    in-out property <string> theme-mode: "system";
+    property <color> canvas: root.dark-theme ? #141C1D : #F6F8F5;
+    property <color> surface: root.dark-theme ? #202B2C : #FFFFFF;
+    property <color> text-primary: root.dark-theme ? #EAF0EC : #263733;
+    property <color> text-muted: root.dark-theme ? #B1C0BA : #667873;
+    property <color> borders: root.dark-theme ? #354547 : #DFE7E1;
+    property <color> accent: root.dark-theme ? #91BDB4 : #547D78;
+    property <color> secondary: root.dark-theme ? #91AA98 : #839B8A;
     in-out property <string> date-label: "Today";
+    in-out property <[ChartItem]> hourly-bars;
+    in-out property <[ChartItem]> weekly-bars;
     in-out property <string> status-text: "Tracking is active";
     in-out property <string> focus-text: "No focus session";
     in-out property <bool> tracking: true;
@@ -29,14 +53,22 @@ export component AppWindow inherits Window {
     callback toggle-focus();
     callback export-data();
     callback set-goal(int);
+    callback navigate-day(int);
+    callback stop-focus();
+    callback set-break-minutes(int);
+    callback change-app-limit(string);
+    callback remove-app-limit(string);
+    callback test-notification();
+    callback clear-history();
+    callback set-theme(string);
 
     Rectangle {
-        background: #f6f8f5;
+        background: root.canvas;
         HorizontalLayout {
             spacing: 0px;
             Rectangle {
                 width: 220px;
-                background: #202b2c;
+                background: #202B2C;
                 VerticalLayout {
                     padding: 18px;
                     spacing: 10px;
@@ -49,8 +81,9 @@ export component AppWindow inherits Window {
                         Text { x: 12px; vertical-alignment: center; text: item; color: #eaf0ec; font-size: 14px; }
                         clicked => { root.navigate(item); }
                     }
-                    Rectangle { height: 1px; background: #354547; }
+                        Rectangle { height: 1px; background: #354547; }
                     Text { text: root.status-text; color: #91bdb4; font-size: 12px; wrap: word-wrap; }
+                    if root.notice-text != "": Text { text: root.notice-text; color: #d6a777; font-size: 11px; wrap: word-wrap; }
                     Button { text: root.tracking ? "Pause tracking" : "Resume tracking"; clicked => { root.toggle-tracking(); } }
                 }
             }
@@ -59,68 +92,106 @@ export component AppWindow inherits Window {
                 VerticalLayout {
                     padding: 28px;
                     spacing: 20px;
-                    Text { text: root.page; color: #263733; font-size: 28px; font-weight: 700; }
+                    Text { text: root.page; color: root.text-primary; font-size: 28px; font-weight: 700; }
                     if root.page == "Dashboard": VerticalLayout {
                         spacing: 18px;
-                        Text { text: root.date-label; color: #667873; font-size: 14px; }
+                        HorizontalLayout { height: 34px; spacing: 12px;
+                            Button { text: "‹ Previous day"; clicked => { root.navigate-day(-1); } }
+                            Text { text: root.date-label; color: root.text-muted; font-size: 14px; vertical-alignment: center; }
+                            Button { text: "Next day ›"; clicked => { root.navigate-day(1); } }
+                        }
                         Rectangle {
-                            height: 150px; background: #ffffff; border-radius: 16px; border-width: 1px; border-color: #dfe7e1;
+                            height: 150px; background: root.surface; border-radius: 16px; border-width: 1px; border-color: root.borders;
                             VerticalLayout { padding: 22px; spacing: 8px;
-                                Text { text: "Today's active screen time"; color: #667873; font-size: 15px; }
-                                Text { text: root.today-total; color: #547d78; font-size: 38px; font-weight: 700; }
-                                Text { text: "Only active, unlocked use is counted"; color: #667873; font-size: 12px; }
+                                Text { text: "Active screen time"; color: root.text-muted; font-size: 15px; }
+                                Text { text: root.today-total; color: root.accent; font-size: 38px; font-weight: 700; }
+                                Text { text: "Only active, unlocked use is counted"; color: root.text-muted; font-size: 12px; }
                             }
                         }
                         Rectangle {
-                            height: 220px; background: #ffffff; border-radius: 16px; border-width: 1px; border-color: #dfe7e1;
+                            height: 210px; background: root.surface; border-radius: 16px; border-width: 1px; border-color: root.borders;
+                            VerticalLayout { padding: 18px; spacing: 10px;
+                                Text { text: "Usage by hour"; color: root.text-primary; font-size: 16px; font-weight: 600; }
+                                HorizontalLayout { height: 142px; spacing: 2px;
+                                    for bar in root.hourly-bars: VerticalLayout { height: 142px; width: 18px; spacing: 3px;
+                                        Rectangle { height: 112px; background: transparent;
+                                            Rectangle { x: 0px; y: parent.height - (parent.height * bar.share / 100); width: parent.width; height: max(2px, parent.height * bar.share / 100); background: root.accent; border-radius: 3px; }
+                                        }
+                                        Text { text: bar.label; color: root.text-muted; font-size: 9px; horizontal-alignment: center; }
+                                    }
+                                }
+                            }
+                        }
+                        Rectangle {
+                            height: 220px; background: root.surface; border-radius: 16px; border-width: 1px; border-color: root.borders;
                             VerticalLayout { padding: 18px; spacing: 12px;
-                                Text { text: "Usage by application · today"; color: #263733; font-size: 16px; font-weight: 600; }
-                                if root.usages.length == 0: Text { text: "Usage will appear here as you work."; color: #667873; vertical-alignment: center; }
+                                Text { text: "Usage by application"; color: root.text-primary; font-size: 16px; font-weight: 600; }
+                                if root.usages.length == 0: Text { text: "Usage will appear here as you work."; color: root.text-muted; vertical-alignment: center; }
                                 for usage in root.usages: HorizontalLayout {
                                     spacing: 12px; height: 30px;
-                                    Text { width: 170px; text: usage.name; color: #263733; vertical-alignment: center; overflow: elide; }
-                                    Rectangle { height: 8px; background: #e5ece7; border-radius: 4px;
-                                        Rectangle { width: parent.width * usage.share / 100; height: parent.height; background: #547d78; border-radius: 4px; }
+                                    Text { width: 170px; text: usage.name; color: root.text-primary; vertical-alignment: center; overflow: elide; }
+                                    Rectangle { height: 8px; background: root.borders; border-radius: 4px;
+                                    Rectangle { width: parent.width * usage.share / 100; height: parent.height; background: root.accent; border-radius: 4px; }
                                     }
-                                    Text { width: 70px; text: usage.duration; color: #667873; vertical-alignment: center; horizontal-alignment: right; }
+                                    Text { width: 70px; text: usage.duration; color: root.text-muted; vertical-alignment: center; horizontal-alignment: right; }
+                                    Button { text: usage.limit-label; clicked => { root.change-app-limit(usage.app-id); } }
+                                    if usage.limit-minutes > 0: Button { text: "×"; clicked => { root.remove-app-limit(usage.app-id); } }
                                 }
                             }
                         }
                         HorizontalLayout {
                             spacing: 16px;
-                            Rectangle { height: 136px; background: #ffffff; border-radius: 14px; border-width: 1px; border-color: #dfe7e1;
-                                VerticalLayout { padding: 18px; spacing: 8px; Text { text: "Focus"; color: #263733; font-size: 16px; font-weight: 600; } Text { text: root.focus-text; color: #667873; wrap: word-wrap; } Button { text: root.focus-active ? "End focus" : "Start 25-minute focus"; clicked => { root.toggle-focus(); } } }
+                            Rectangle { height: 180px; background: root.surface; border-radius: 14px; border-width: 1px; border-color: root.borders;
+                                VerticalLayout { padding: 18px; spacing: 8px; Text { text: "Focus · " + root.focus-count; color: root.text-primary; font-size: 16px; font-weight: 600; } Text { text: root.focus-text; color: root.text-muted; wrap: word-wrap; } Slider { minimum: 5; maximum: 120; value: root.focus-minutes; changed => { root.focus-minutes = self.value; } } HorizontalLayout { spacing: 8px; Button { text: root.focus-active ? "Pause / resume" : "Start focus"; clicked => { root.toggle-focus(); } } Button { text: "End"; clicked => { root.stop-focus(); } } } }
                             }
-                            Rectangle { height: 136px; background: #ffffff; border-radius: 14px; border-width: 1px; border-color: #dfe7e1;
-                                VerticalLayout { padding: 18px; spacing: 8px; Text { text: "Daily goal"; color: #263733; font-size: 16px; font-weight: 600; } Text { text: "Target · " + root.goal-label; color: #667873; } Slider { minimum: 15; maximum: 720; value: root.goal-minutes; changed => { root.goal-minutes = self.value; root.set-goal(self.value); } } }
+                            Rectangle { height: 180px; background: root.surface; border-radius: 14px; border-width: 1px; border-color: root.borders;
+                                VerticalLayout { padding: 18px; spacing: 8px; Text { text: "Daily goal"; color: root.text-primary; font-size: 16px; font-weight: 600; } Text { text: "Target · " + root.goal-label; color: root.text-muted; } Slider { minimum: 15; maximum: 720; value: root.goal-minutes; changed => { root.goal-minutes = self.value; root.set-goal(self.value); } } }
                             }
                         }
                     }
                     if root.page == "Ways to disconnect": VerticalLayout {
                         spacing: 14px;
-                        Text { text: "Build intentional breaks into your day."; color: #667873; }
-                        Rectangle { height: 100px; background: #ffffff; border-radius: 12px; border-width: 1px; border-color: #dfe7e1; VerticalLayout { padding: 18px; spacing: 8px; Text { text: "Focus mode"; color: #263733; font-size: 17px; font-weight: 600; } Text { text: "A local 25-minute focus session. This app will not terminate or block other applications."; color: #667873; wrap: word-wrap; } Button { text: root.focus-active ? "End focus session" : "Start 25-minute session"; clicked => { root.toggle-focus(); } } } }
-                        Rectangle { height: 82px; background: #ffffff; border-radius: 12px; border-width: 1px; border-color: #dfe7e1; VerticalLayout { padding: 18px; spacing: 8px; Text { text: "Break reminders"; color: #263733; font-size: 17px; font-weight: 600; } Text { text: "Reminder scheduling is not enabled in this build."; color: #667873; } } }
-                        Rectangle { height: 82px; background: #ffffff; border-radius: 12px; border-width: 1px; border-color: #dfe7e1; VerticalLayout { padding: 18px; spacing: 8px; Text { text: "Bedtime mode"; color: #263733; font-size: 17px; font-weight: 600; } Text { text: "No system display or Do Not Disturb settings are changed."; color: #667873; } } }
+                        Text { text: "Build intentional breaks into your day."; color: root.text-muted; }
+                        Rectangle { height: 152px; background: root.surface; border-radius: 12px; border-width: 1px; border-color: root.borders; VerticalLayout { padding: 18px; spacing: 8px; Text { text: "Focus · " + root.focus-count; color: root.text-primary; font-size: 17px; font-weight: 600; } Text { text: "Choose a 5–120 minute session. Apps will not be blocked or closed."; color: root.text-muted; } Slider { minimum: 5; maximum: 120; value: root.focus-minutes; changed => { root.focus-minutes = self.value; } } HorizontalLayout { spacing: 8px; Button { text: root.focus-active ? "Pause / resume" : "Start focus"; clicked => { root.toggle-focus(); } } Button { text: "End"; clicked => { root.stop-focus(); } } } } }
+                        Rectangle { height: 150px; background: root.surface; border-radius: 12px; border-width: 1px; border-color: root.borders; VerticalLayout { padding: 18px; spacing: 8px; Text { text: "Break reminder"; color: root.text-primary; font-size: 17px; font-weight: 600; } Text { text: root.break-minutes == 0 ? "Break reminders are off." : "After " + root.break-minutes + " minutes of continuous active use."; color: root.text-muted; } Slider { minimum: 15; maximum: 120; value: max(15, root.break-minutes); changed => { root.break-minutes = self.value; root.set-break-minutes(self.value); } } Button { text: root.break-minutes == 0 ? "Turn reminders on (45m)" : "Turn reminders off"; clicked => { let next = root.break-minutes == 0 ? 45 : 0; root.break-minutes = next; root.set-break-minutes(next); } } } }
+                        Rectangle { height: 82px; background: root.surface; border-radius: 12px; border-width: 1px; border-color: root.borders; VerticalLayout { padding: 18px; spacing: 8px; Text { text: "Bedtime mode"; color: root.text-primary; font-size: 17px; font-weight: 600; } Text { text: "Not available yet. This app does not change display or Do Not Disturb settings."; color: root.text-muted; } } }
                     }
                     if root.page == "Reduce interruptions": VerticalLayout {
                         spacing: 14px;
-                        Text { text: "System notifications remain under your operating system's control."; color: #667873; }
-                        Rectangle { height: 110px; background: #ffffff; border-radius: 12px; border-width: 1px; border-color: #dfe7e1; VerticalLayout { padding: 18px; spacing: 8px; Text { text: "Quiet hours and Do Not Disturb"; color: #263733; font-size: 17px; font-weight: 600; } Text { text: "This app does not change system-wide notification settings. Use Windows Settings or your Linux desktop's notification controls."; color: #667873; wrap: word-wrap; } } }
-                        Rectangle { height: 90px; background: #ffffff; border-radius: 12px; border-width: 1px; border-color: #dfe7e1; VerticalLayout { padding: 18px; spacing: 8px; Text { text: "Heads Up"; color: #263733; font-size: 17px; font-weight: 600; } Text { text: "Usage tracking is active only when user input has occurred recently. Break-reminder alerts are not yet implemented."; color: #667873; wrap: word-wrap; } } }
+                        Text { text: "System notifications remain under your operating system's control."; color: root.text-muted; }
+                        Rectangle { height: 110px; background: root.surface; border-radius: 12px; border-width: 1px; border-color: root.borders; VerticalLayout { padding: 18px; spacing: 8px; Text { text: "Quiet hours and Do Not Disturb"; color: root.text-primary; font-size: 17px; font-weight: 600; } Text { text: "This app does not change system-wide notification settings. Use Windows Settings or your Linux desktop's notification controls."; color: root.text-muted; wrap: word-wrap; } } }
+                        Rectangle { height: 90px; background: root.surface; border-radius: 12px; border-width: 1px; border-color: root.borders; VerticalLayout { padding: 18px; spacing: 8px; Text { text: "Heads Up"; color: root.text-primary; font-size: 17px; font-weight: 600; } Text { text: "Break reminders are managed in Ways to disconnect. Windows notification preferences remain under Windows Settings."; color: root.text-muted; wrap: word-wrap; } } }
                     }
                     if root.page == "Insights and history": VerticalLayout {
                         spacing: 14px;
-                        Text { text: "Today's application totals are stored locally in SQLite."; color: #667873; }
-                        Rectangle { height: 90px; background: #ffffff; border-radius: 12px; border-width: 1px; border-color: #dfe7e1; VerticalLayout { padding: 18px; spacing: 8px; Text { text: "No fabricated comparisons"; color: #263733; font-size: 17px; font-weight: 600; } Text { text: "Weekly and monthly insights will appear after sufficient history is recorded."; color: #667873; } } }
+                        Text { text: "Seven days ending " + root.date-label; color: root.text-muted; }
+                        Rectangle { height: 220px; background: root.surface; border-radius: 12px; border-width: 1px; border-color: root.borders;
+                            VerticalLayout { padding: 18px; spacing: 10px; Text { text: "Daily active time"; color: root.text-primary; font-size: 17px; font-weight: 600; }
+                                HorizontalLayout { height: 150px; spacing: 8px;
+                                    for day in root.weekly-bars: VerticalLayout { width: 72px; height: 150px; spacing: 6px;
+                                        Rectangle { height: 116px; background: transparent;
+                                            Rectangle { x: 0px; y: parent.height - (parent.height * day.share / 100); width: parent.width; height: max(2px, parent.height * day.share / 100); background: root.secondary; border-radius: 4px; }
+                                        }
+                                        Text { text: day.label; color: root.text-muted; font-size: 11px; horizontal-alignment: center; }
+                                        Text { text: day.value; color: root.text-muted; font-size: 10px; horizontal-alignment: center; }
+                                    }
+                                }
+                            }
+                        }
+                        Rectangle { height: 90px; background: root.surface; border-radius: 12px; border-width: 1px; border-color: root.borders; VerticalLayout { padding: 18px; spacing: 8px; Text { text: "No fabricated comparisons"; color: root.text-primary; font-size: 17px; font-weight: 600; } Text { text: "Weekly and monthly insights will appear after sufficient history is recorded."; color: root.text-muted; } } }
                         Button { text: "Export all history as CSV"; clicked => { root.export-data(); } }
                     }
                     if root.page == "Settings": VerticalLayout {
                         spacing: 14px;
-                        Rectangle { height: 80px; background: #ffffff; border-radius: 12px; border-width: 1px; border-color: #dfe7e1; VerticalLayout { padding: 18px; spacing: 8px; Text { text: "Local privacy"; color: #263733; font-size: 17px; font-weight: 600; } Text { text: "Tracking stays on this device. No keystrokes, screenshots, page contents, or telemetry are collected."; color: #667873; wrap: word-wrap; } } }
+                        Rectangle { height: 80px; background: root.surface; border-radius: 12px; border-width: 1px; border-color: root.borders; VerticalLayout { padding: 18px; spacing: 8px; Text { text: "Local privacy"; color: root.text-primary; font-size: 17px; font-weight: 600; } Text { text: "Tracking stays on this device. No keystrokes, screenshots, page contents, or telemetry are collected."; color: root.text-muted; wrap: word-wrap; } } }
                         Button { text: root.tracking ? "Pause tracking" : "Resume tracking"; clicked => { root.toggle-tracking(); } }
                         Button { text: "Export usage CSV"; clicked => { root.export-data(); } }
-                        Text { text: "This release currently provides the calm light theme only."; color: #667873; }
+                        Button { text: "Send test Windows notification"; clicked => { root.test-notification(); } }
+                        Text { text: "Theme · " + root.theme-mode; color: root.text-primary; font-size: 17px; font-weight: 600; }
+                        HorizontalLayout { spacing: 8px; Button { text: "System"; clicked => { root.set-theme("system"); } } Button { text: "Light"; clicked => { root.set-theme("light"); } } Button { text: "Dark"; clicked => { root.set-theme("dark"); } } }
+                        Text { text: "Notifications work after installing the app so Windows can associate them with its Start menu shortcut."; color: root.text-muted; wrap: word-wrap; }
+                        Button { text: root.confirm-clear ? "Confirm delete all history" : "Delete all usage history…"; clicked => { if root.confirm-clear { root.clear-history(); root.confirm-clear = false; } else { root.confirm-clear = true; } } }
+                        Text { text: root.confirm-clear ? "This permanently removes usage history and focus sessions." : "Deleting history keeps your tracking preferences and app limits."; color: root.text-muted; wrap: word-wrap; }
                     }
                 }
             }
