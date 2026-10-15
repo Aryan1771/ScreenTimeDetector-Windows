@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Digital Wellbeing
+Comment=View local active application screen time
+Exec=digital-wellbeing
+Terminal=false
+Categories=Utility;

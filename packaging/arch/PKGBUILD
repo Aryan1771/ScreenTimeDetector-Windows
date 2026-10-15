@@ -1,0 +1,28 @@
+pkgname=digital-wellbeing
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Local-first desktop active screen-time dashboard'
+arch=('x86_64')
+url='https://github.com/Aryan1771/ScreenTimeDetector-Windows'
+license=('GPL-3.0-only')
+depends=('gcc-libs' 'fontconfig' 'libxkbcommon' 'libxcb' 'libx11')
+makedepends=('rust' 'cargo' 'cmake' 'pkgconf' 'git')
+source=("${pkgname}::git+https://github.com/Aryan1771/ScreenTimeDetector-Windows.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "${srcdir}/${pkgname}"
+  printf '0.1.0.r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+  cd "${srcdir}/${pkgname}"
+  cargo build --release --locked
+}
+
+package() {
+  cd "${srcdir}/${pkgname}"
+  install -Dm755 target/release/digital-wellbeing "${pkgdir}/usr/bin/digital-wellbeing"
+  install -Dm644 packaging/arch/digital-wellbeing.desktop "${pkgdir}/usr/share/applications/digital-wellbeing.desktop"
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}
