@@ -9,6 +9,9 @@ mod native {
     #[link(name = "user32")]
     unsafe extern "system" {
         fn GetForegroundWindow() -> *mut c_void;
+        fn IsIconic(hwnd: *mut c_void) -> i32;
+        fn IsWindowVisible(hwnd: *mut c_void) -> i32;
+        fn GetClassNameW(hwnd: *mut c_void, class_name: *mut u16, max_count: i32) -> i32;
         fn GetWindowThreadProcessId(hwnd: *mut c_void, pid: *mut u32) -> u32;
         fn GetLastInputInfo(info: *mut LastInputInfo) -> i32;
         fn OpenInputDesktop(flags: u32, inherit: i32, desired_access: u32) -> *mut c_void;
@@ -42,7 +45,18 @@ mod native {
             return None;
         }
         let hwnd = unsafe { GetForegroundWindow() };
-        if hwnd.is_null() {
+        if hwnd.is_null() || unsafe { IsIconic(hwnd) } != 0 || unsafe { IsWindowVisible(hwnd) } == 0
+        {
+            return None;
+        }
+        let mut class_name = [0_u16; 64];
+        let length =
+            unsafe { GetClassNameW(hwnd, class_name.as_mut_ptr(), class_name.len() as i32) };
+        let class_name = String::from_utf16_lossy(&class_name[..length.max(0) as usize]);
+        if matches!(
+            class_name.as_str(),
+            "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd"
+        ) {
             return None;
         }
         let mut pid = 0;

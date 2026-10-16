@@ -80,6 +80,61 @@ pub fn open_notification_settings() -> Result<(), String> {
     }
 }
 
+pub fn open_browser_extension_folder() -> Result<(), String> {
+    let executable = std::env::current_exe()
+        .map_err(|_| "Could not locate the application folder.".to_owned())?;
+    let directory = executable
+        .parent()
+        .ok_or("Could not locate the application folder.")?;
+    let installed = directory.join("browser/chromium");
+    let development = directory.join("../../browser/chromium");
+    let folder = if installed.join("manifest.json").is_file() {
+        installed
+    } else if development.join("manifest.json").is_file() {
+        development
+    } else {
+        return Err(
+            "Install the latest Digital Wellbeing update to set up website tracking.".into(),
+        );
+    };
+    open_target(&folder.to_string_lossy(), None)
+}
+
+pub fn open_opera_extensions() -> Result<(), String> {
+    let local = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .ok_or("Open opera://extensions in Opera GX to continue.")?;
+    let executable = ["Programs/Opera GX/opera.exe", "Programs/Opera/opera.exe"]
+        .into_iter()
+        .map(|path| local.join(path))
+        .find(|path| path.is_file())
+        .ok_or("Open opera://extensions in Opera GX to continue.")?;
+    open_target(&executable.to_string_lossy(), Some("opera://extensions"))
+}
+
+fn open_target(target: &str, arguments: Option<&str>) -> Result<(), String> {
+    let operation = wide("open");
+    let target = wide(target);
+    let arguments = arguments.map(wide);
+    let result = unsafe {
+        ShellExecuteW(
+            ptr::null_mut(),
+            operation.as_ptr(),
+            target.as_ptr(),
+            arguments
+                .as_ref()
+                .map_or(ptr::null(), |value| value.as_ptr()),
+            ptr::null(),
+            1,
+        )
+    };
+    if result as usize > 32 {
+        Ok(())
+    } else {
+        Err("Could not open the requested location. Please try again.".into())
+    }
+}
+
 unsafe extern "system" fn hide_process_window(window: *mut c_void, parameter: *mut c_void) -> i32 {
     let mut process_id = 0;
     unsafe {

@@ -1,4 +1,4 @@
-import { Button, CheckBox, ScrollView, Slider } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, ScrollView, Slider } from "std-widgets.slint";
 
 export struct UsageItem {
     app-id: string,
@@ -19,9 +19,14 @@ export struct WebsiteItem {
     duration: string,
     share: int,
 }
+export struct HourAppItem {
+    name: string,
+    duration: string,
+}
 
 export component AppWindow inherits Window {
     title: "Digital Wellbeing";
+    icon: @image-url("../assets/logo.png");
     preferred-width: 1160px;
     preferred-height: 760px;
     min-width: 900px;
@@ -47,6 +52,16 @@ export component AppWindow inherits Window {
     property <color> accent: root.dark-theme ? #91BDB4 : #547D78;
     property <color> secondary: root.dark-theme ? #91AA98 : #839B8A;
     in-out property <string> date-label: "Today";
+    in-out property <string> selected-day-key;
+    in-out property <string> today-key;
+    in-out property <string> full-day-total: "0h 00m 00s";
+    in-out property <string> chart-week-label;
+    in-out property <string> chart-view: "Daily";
+    in-out property <[ChartItem]> daily-bars;
+    in-out property <int> selected-hour: 0;
+    in-out property <string> hour-label;
+    in-out property <string> hour-total;
+    in-out property <[HourAppItem]> hour-apps;
     in-out property <[ChartItem]> hourly-bars;
     in-out property <[ChartItem]> weekly-bars;
     in-out property <[ChartItem]> monthly-bars;
@@ -69,6 +84,7 @@ export component AppWindow inherits Window {
     callback set-goal(int);
     callback navigate-day(int);
     callback select-date(string);
+    callback select-hour(int);
     callback stop-focus();
     callback set-break-minutes(int);
     callback change-app-limit(string);
@@ -81,6 +97,8 @@ export component AppWindow inherits Window {
     callback set-quiet-start-hour(int);
     callback set-quiet-end-hour(int);
     callback open-notification-settings();
+    callback open-browser-extension-folder();
+    callback open-opera-extensions();
 
     Rectangle {
         background: root.canvas;
@@ -90,21 +108,25 @@ export component AppWindow inherits Window {
                 width: 220px;
                 background: #202B2C;
                 VerticalLayout {
-                    padding: 18px;
-                    spacing: 10px;
-                    Text { text: "Digital Wellbeing"; color: #eaf0ec; font-size: 21px; font-weight: 700; }
+                    padding: 16px;
+                    spacing: 8px;
+                    HorizontalLayout { height: 48px; spacing: 10px;
+                        Image { source: @image-url("../assets/logo.png"); width: 40px; height: 40px; image-fit: contain; }
+                        Text { text: "Digital Wellbeing"; color: #eaf0ec; font-size: 19px; font-weight: 700; wrap: word-wrap; }
+                    }
                     Text { text: "Use your computer with intention"; color: #b1c0ba; font-size: 12px; wrap: word-wrap; }
-                    Rectangle { height: 18px; background: transparent; }
+                    Rectangle { height: 6px; background: transparent; }
                     for item in ["Dashboard", "Ways to disconnect", "Reduce interruptions", "Insights and history", "Settings"] : TouchArea {
-                        height: 44px;
+                        height: 42px;
                         Rectangle { background: item == root.page ? #354547 : transparent; border-radius: 8px; }
                         Text { x: 12px; vertical-alignment: center; text: item; color: #eaf0ec; font-size: 14px; }
                         clicked => { root.navigate(item); }
                     }
-                        Rectangle { height: 1px; background: #354547; }
+                    Rectangle { vertical-stretch: 1; min-height: 8px; background: transparent; }
+                    Rectangle { height: 1px; background: #354547; }
                     Text { text: root.status-text; color: #91bdb4; font-size: 12px; wrap: word-wrap; }
                     if root.notice-text != "": Text { text: root.notice-text; color: #d6a777; font-size: 11px; wrap: word-wrap; }
-                    Button { text: root.tracking ? "Pause tracking" : "Resume tracking"; clicked => { root.toggle-tracking(); } }
+                    Button { height: 36px; text: root.tracking ? "Pause tracking" : "Resume tracking"; clicked => { root.toggle-tracking(); } }
                 }
             }
             ScrollView {
@@ -119,59 +141,104 @@ export component AppWindow inherits Window {
                             Button { text: "‹ Previous day"; clicked => { root.navigate-day(-1); } }
                             Text { text: root.date-label; color: root.text-muted; font-size: 14px; vertical-alignment: center; }
                             Button { text: "Next day ›"; clicked => { root.navigate-day(1); } }
+                            Button { text: "Today"; clicked => { root.select-date(root.today-key); } }
                         }
                         Rectangle {
                             height: 150px; background: root.surface; border-radius: 16px; border-width: 1px; border-color: root.borders;
                             VerticalLayout { padding: 22px; spacing: 8px;
-                                Text { text: "Active screen time"; color: root.text-muted; font-size: 15px; }
-                                Text { text: root.today-total; color: root.accent; font-size: 38px; font-weight: 700; }
-                                Text { text: "Only active, unlocked use is counted"; color: root.text-muted; font-size: 12px; }
+                                Text { text: "Total active time · " + root.date-label; color: root.text-muted; font-size: 15px; }
+                                Text { text: root.full-day-total; color: root.accent; font-size: 38px; font-weight: 700; }
+                                Text { text: "Only the focused app counts · Minimized apps pause"; color: root.text-muted; font-size: 12px; }
                             }
                         }
-                        Rectangle {
-                            height: 210px; background: root.surface; border-radius: 16px; border-width: 1px; border-color: root.borders;
+                        HorizontalLayout { height: 36px; spacing: 12px;
+                            Text { text: "Activity"; color: root.text-primary; font-size: 18px; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
+                            ComboBox { width: 150px; model: ["Daily", "Hourly"]; current-value <=> root.chart-view; }
+                        }
+                        if root.chart-view == "Daily": Rectangle {
+                            height: 260px; background: root.surface; border-radius: 16px; border-width: 1px; border-color: root.borders;
                             VerticalLayout { padding: 18px; spacing: 10px;
-                                Text { text: "Usage by hour"; color: root.text-primary; font-size: 16px; font-weight: 600; }
-                                HorizontalLayout { height: 142px; spacing: 2px;
-                                    for bar in root.hourly-bars: VerticalLayout { height: 142px; width: 18px; spacing: 3px;
-                                        Rectangle { height: 112px; background: transparent;
-                                            Rectangle { x: 0px; y: parent.height - (parent.height * bar.share / 100); width: parent.width; height: max(2px, parent.height * bar.share / 100); background: root.accent; border-radius: 3px; }
+                                HorizontalLayout { height: 32px; spacing: 8px;
+                                    Text { text: "Daily active time"; color: root.text-primary; font-size: 16px; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
+                                    Button { text: "‹ Week"; clicked => { root.navigate-day(-7); } }
+                                    Button { text: "Week ›"; clicked => { root.navigate-day(7); } }
+                                }
+                                Text { text: root.chart-week-label + " · Select a day below"; color: root.text-muted; font-size: 12px; }
+                                HorizontalLayout { height: 150px; spacing: 10px;
+                                    for day in root.daily-bars: TouchArea {
+                                        horizontal-stretch: 1;
+                                        clicked => { root.select-date(day.day-key); }
+                                        VerticalLayout { spacing: 5px;
+                                            Text { height: 18px; text: day.value; color: root.text-primary; font-size: 11px; horizontal-alignment: center; }
+                                            Rectangle { height: 96px; background: root.selected-day-key == day.day-key ? root.borders : transparent; border-radius: 5px;
+                                                Rectangle { x: 8px; width: max(2px, parent.width - 16px); y: parent.height - self.height; height: day.share == 0 ? 0px : max(3px, parent.height * day.share / 100); background: root.selected-day-key == day.day-key ? root.accent : root.secondary; border-radius: 4px; }
+                                            }
+                                            Text { height: 20px; text: day.label; color: root.selected-day-key == day.day-key ? root.text-primary : root.text-muted; font-weight: root.selected-day-key == day.day-key ? 700 : 400; font-size: 11px; horizontal-alignment: center; }
                                         }
-                                        Text { text: bar.label; color: root.text-muted; font-size: 9px; horizontal-alignment: center; }
                                     }
                                 }
                             }
                         }
+                        if root.chart-view == "Hourly": Rectangle {
+                            height: 320px + root.hour-apps.length * 30px; background: root.surface; border-radius: 16px; border-width: 1px; border-color: root.borders;
+                            VerticalLayout { padding: 18px; spacing: 10px; alignment: start;
+                                Text { text: "Hourly activity · " + root.date-label; color: root.text-primary; font-size: 16px; font-weight: 600; }
+                                Text { text: "Bar height shows active minutes, up to 60 per hour. Select an hour to see its apps."; color: root.text-muted; font-size: 12px; wrap: word-wrap; }
+                                HorizontalLayout { height: 142px; spacing: 2px;
+                                    for bar[index] in root.hourly-bars: TouchArea { horizontal-stretch: 1;
+                                        clicked => { root.select-hour(index); }
+                                        VerticalLayout { height: 142px; spacing: 3px;
+                                            Rectangle { height: 112px; background: root.selected-hour == index ? root.borders : transparent; border-radius: 3px;
+                                                Rectangle { x: 2px; width: max(1px, parent.width - 4px); y: parent.height - self.height; height: bar.share == 0 ? 0px : max(2px, parent.height * bar.share / 100); background: root.selected-hour == index ? root.accent : root.secondary; border-radius: 3px; }
+                                            }
+                                            Text { text: bar.label; color: root.selected-hour == index ? root.text-primary : root.text-muted; font-size: 9px; horizontal-alignment: center; }
+                                        }
+                                    }
+                                }
+                                Text { text: root.hour-label + " · " + root.hour-total + " active"; color: root.text-primary; font-size: 14px; font-weight: 600; }
+                                if root.hour-apps.length == 0: Text { text: "No active app time recorded in this hour."; color: root.text-muted; font-size: 12px; }
+                                for app in root.hour-apps: HorizontalLayout { height: 20px; spacing: 12px;
+                                    Text { text: app.name; color: root.text-primary; overflow: elide; horizontal-stretch: 1; }
+                                    Text { text: app.duration; color: root.text-muted; horizontal-alignment: right; }
+                                }
+                            }
+                        }
                         Rectangle {
-                            height: 220px; background: root.surface; border-radius: 16px; border-width: 1px; border-color: root.borders;
-                            VerticalLayout { padding: 18px; spacing: 12px;
+                            height: max(126px, 76px + root.usages.length * 44px); background: root.surface; border-radius: 16px; border-width: 1px; border-color: root.borders;
+                            VerticalLayout { padding: 18px; spacing: 12px; alignment: start;
                                 Text { text: "Usage by application"; color: root.text-primary; font-size: 16px; font-weight: 600; }
                                 if root.usages.length == 0: Text { text: "Usage will appear here as you work."; color: root.text-muted; vertical-alignment: center; }
                                 for usage in root.usages: HorizontalLayout {
-                                    spacing: 12px; height: 30px;
-                                    Text { width: 170px; text: usage.name; color: root.text-primary; vertical-alignment: center; overflow: elide; }
-                                    Rectangle { height: 8px; background: root.borders; border-radius: 4px;
-                                    Rectangle { width: parent.width * usage.share / 100; height: parent.height; background: root.accent; border-radius: 4px; }
+                                    spacing: 12px; height: 32px;
+                                    Text { width: 150px; text: usage.name; color: root.text-primary; vertical-alignment: center; overflow: elide; }
+                                    Rectangle { min-width: 30px; horizontal-stretch: 1; height: 32px; background: transparent;
+                                        Rectangle { y: (parent.height - self.height) / 2; height: 8px; width: parent.width; background: root.borders; border-radius: 4px;
+                                            Rectangle { x: 0px; width: parent.width * usage.share / 100; height: parent.height; background: root.accent; border-radius: 4px; }
+                                        }
                                     }
                                     Text { width: 70px; text: usage.duration; color: root.text-muted; vertical-alignment: center; horizontal-alignment: right; }
-                                    Button { text: usage.limit-label; clicked => { root.change-app-limit(usage.app-id); } }
+                                    Button { width: 84px; text: usage.limit-label; clicked => { root.change-app-limit(usage.app-id); } }
                                     if usage.limit-minutes > 0: Button { text: "×"; clicked => { root.remove-app-limit(usage.app-id); } }
                                 }
                             }
                         }
                         Rectangle {
-                            height: 170px; background: root.surface; border-radius: 16px; border-width: 1px; border-color: root.borders;
-                            VerticalLayout { padding: 18px; spacing: 10px;
+                            height: root.websites.length == 0 ? 184px : 156px + root.websites.length * 40px; background: root.surface; border-radius: 16px; border-width: 1px; border-color: root.borders;
+                            VerticalLayout { padding: 18px; spacing: 10px; alignment: start;
                                 Text { text: "Usage by website"; color: root.text-primary; font-size: 16px; font-weight: 600; }
-                                if root.websites.length == 0: Text { text: "Install the optional Chromium extension to see domain-only usage. Private windows are excluded."; color: root.text-muted; vertical-alignment: center; wrap: word-wrap; }
+                                if root.websites.length > 0: Text { text: "A breakdown of browser time, included in your screen time total."; color: root.text-muted; wrap: word-wrap; }
+                                if root.websites.length == 0: Text { text: "Connect your browser to see time spent on YouTube and other websites. Opera GX, Chrome and Edge are supported."; color: root.text-muted; wrap: word-wrap; }
                                 for website in root.websites: HorizontalLayout {
-                                    spacing: 12px; height: 26px;
-                                    Text { width: 200px; text: website.domain; color: root.text-primary; vertical-alignment: center; overflow: elide; }
-                                    Rectangle { height: 8px; background: root.borders; border-radius: 4px;
-                                        Rectangle { width: parent.width * website.share / 100; height: parent.height; background: root.secondary; border-radius: 4px; }
+                                    spacing: 12px; height: 30px;
+                                    Text { width: 180px; text: website.domain; color: root.text-primary; vertical-alignment: center; overflow: elide; }
+                                    Rectangle { min-width: 30px; horizontal-stretch: 1; height: 30px; background: transparent;
+                                        Rectangle { y: (parent.height - self.height) / 2; width: parent.width; height: 8px; background: root.borders; border-radius: 4px;
+                                            Rectangle { x: 0px; width: parent.width * website.share / 100; height: parent.height; background: root.secondary; border-radius: 4px; }
+                                        }
                                     }
                                     Text { width: 70px; text: website.duration; color: root.text-muted; vertical-alignment: center; horizontal-alignment: right; }
                                 }
+                                Button { text: "Set up website tracking"; clicked => { root.navigate("Website tracking setup"); } }
                             }
                         }
                         HorizontalLayout {
@@ -183,6 +250,17 @@ export component AppWindow inherits Window {
                                 VerticalLayout { padding: 18px; spacing: 8px; Text { text: "Daily goal"; color: root.text-primary; font-size: 16px; font-weight: 600; } Text { text: "Target · " + root.goal-label; color: root.text-muted; } Slider { minimum: 15; maximum: 720; value: root.goal-minutes; changed => { root.goal-minutes = self.value; root.set-goal(self.value); } } }
                             }
                         }
+                    }
+                    if root.page == "Website tracking setup": VerticalLayout {
+                        spacing: 18px;
+                        Text { text: "Connect Opera GX"; color: root.text-primary; font-size: 20px; font-weight: 600; }
+                        Text { text: "1. Open Opera GX's extensions page, then turn on Developer mode."; color: root.text-primary; wrap: word-wrap; }
+                        Button { text: "Open Opera GX extensions"; clicked => { root.open-opera-extensions(); } }
+                        Text { text: "2. Choose Load unpacked and select the folder opened by the button below."; color: root.text-primary; wrap: word-wrap; }
+                        Button { text: "Open extension folder"; clicked => { root.open-browser-extension-folder(); } }
+                        Text { text: "3. Keep a normal website tab such as youtube.com focused for at least 10 seconds. Return here to see its active time."; color: root.text-primary; wrap: word-wrap; }
+                        Text { text: "Only active hostnames are saved. Private windows, full URLs and page contents are excluded. Chrome and Edge use the same extension folder on their extensions pages."; color: root.text-muted; wrap: word-wrap; }
+                        Button { text: "Back to dashboard"; clicked => { root.navigate("Dashboard"); } }
                     }
                     if root.page == "Ways to disconnect": VerticalLayout {
                         spacing: 14px;
@@ -243,7 +321,7 @@ export component AppWindow inherits Window {
                     if root.page == "Settings": VerticalLayout {
                         spacing: 14px;
                         Rectangle { height: 80px; background: root.surface; border-radius: 12px; border-width: 1px; border-color: root.borders; VerticalLayout { padding: 18px; spacing: 8px; Text { text: "Local privacy"; color: root.text-primary; font-size: 17px; font-weight: 600; } Text { text: "Tracking stays on this device. No keystrokes, screenshots, page contents, or telemetry are collected."; color: root.text-muted; wrap: word-wrap; } } }
-                        Rectangle { height: 108px; background: root.surface; border-radius: 12px; border-width: 1px; border-color: root.borders; VerticalLayout { padding: 18px; spacing: 8px; Text { text: "Browser domain tracking"; color: root.text-primary; font-size: 17px; font-weight: 600; } Text { text: "Optional. After installing the app, load the unpacked extension from its browser/chromium folder in Chrome or Edge. It stores active hostnames only; private windows and page contents are excluded."; color: root.text-muted; wrap: word-wrap; } } }
+                        Rectangle { height: 150px; background: root.surface; border-radius: 12px; border-width: 1px; border-color: root.borders; VerticalLayout { padding: 18px; spacing: 8px; Text { text: "Browser domain tracking"; color: root.text-primary; font-size: 17px; font-weight: 600; } Text { text: "Connect Opera GX, Chrome or Edge to see active website time. Only hostnames are saved; private windows are excluded."; color: root.text-muted; wrap: word-wrap; } Button { text: "Set up website tracking"; clicked => { root.navigate("Website tracking setup"); } } } }
                         Button { text: root.tracking ? "Pause tracking" : "Resume tracking"; clicked => { root.toggle-tracking(); } }
                         Button { text: "Export usage CSV"; clicked => { root.export-data(); } }
                         Button { text: "Send test Windows notification"; clicked => { root.test-notification(); } }

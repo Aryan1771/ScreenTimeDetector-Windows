@@ -6,13 +6,13 @@ It does not request browser history, file access, page contents, or private-wind
 
 ## Install
 
-1. Install Digital Wellbeing with DigitalWellbeing-Setup-x64.exe. The installer registers the native messaging host for Chrome and Edge for the current Windows user.
-2. In the browser, open its extensions page and enable Developer mode.
+1. Install Digital Wellbeing with DigitalWellbeing-Setup-x64.exe. The installer registers the native messaging host for Chrome/Opera and Edge for the current Windows user.
+2. In Opera GX, open `opera://extensions` and enable Developer mode. Chrome and Edge use their own extensions pages.
 3. Choose Load unpacked and select the browser/chromium directory inside the Digital Wellbeing install directory.
 4. Keep the extension enabled. Website rows appear in Digital Wellbeing after active browsing samples arrive.
 
-Brave, Opera, and Vivaldi support Chromium extensions, but their native-messaging registry discovery varies by vendor and release. The installer currently registers Chrome and Edge only. For the other Chromium browsers, install this extension manually and use the browser's documented native-messaging registration location if it does not discover the Chrome host registration.
+Opera uses Chrome's Windows native-messaging registration location ([Opera native messaging documentation](https://help.opera.com/en/extensions/message-passing/#native-messaging)). No separate Opera registry entry is needed. The app's **Set up website tracking** page opens Opera GX's extensions page and the installed extension folder. Loading the extension is a one-time browser step; installing the desktop app alone does not install it into your browser. Brave and Vivaldi have not been verified.
 
 ## Privacy and limitations
 
-The extension needs access to tab URLs to reduce them locally to hostnames. It does not persist URLs. Activity attribution is sampled when the active tab changes, the browser changes focus, and every five seconds; very brief tab changes may therefore be rounded to the nearest sample. Time in private windows counts only in the app's overall browser-process total, never toward a website.
+The extension needs access to tab URLs to reduce them locally to hostnames. It does not persist URLs. Activity attribution is sampled when the active tab changes, the browser changes focus, and every five seconds; very brief tab changes may therefore be rounded to the nearest sample. Only a focused, non-minimized browser window is attributed to a website. The native host also checks the exact launching browser process, Windows idle/lock state, and the app's tracking pause setting. Time in private windows counts only in the app's overall browser-process total, never toward a website. Website time is a breakdown of browser time and is not added again to the overall screen-time total.

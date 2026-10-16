@@ -27,6 +27,7 @@ pub fn run(
     std::fs::create_dir_all(&data_dir)?;
     let db_path = data_dir.join("wellbeing.sqlite3");
     let db = Database::open(&db_path)?;
+    let browser_pid = native_browser_pid();
     let stdin = io::stdin();
     let mut input = stdin.lock();
     let stdout = io::stdout();
@@ -50,20 +51,20 @@ pub fn run(
         input.read_exact(&mut bytes)?;
         let result = serde_json::from_slice::<Value>(&bytes)
             .ok()
-            .is_some_and(|message| record_message(&db, &message));
+            .is_some_and(|message| record_message(&db, &message, browser_pid));
         write_response(&mut output, &json!({"ok": result}))?;
     }
 }
 
-fn record_message(db: &Database, message: &Value) -> bool {
-    record_message_with_foreground(db, message, browser_is_foreground())
+fn record_message(db: &Database, message: &Value, browser_pid: Option<u32>) -> bool {
+    record_message_with_foreground(db, message, browser_is_foreground(browser_pid))
 }
 
 fn record_message_with_foreground(db: &Database, message: &Value, foreground: bool) -> bool {
     let Some((domain, seconds)) = parse_website_usage(message) else {
         return false;
     };
-    if !foreground {
+    if !foreground || db.preference("tracking_enabled", "true").as_deref() != Ok("true") {
         return false;
     }
     let now = Local::now();
@@ -90,24 +91,46 @@ fn parse_website_usage(message: &Value) -> Option<(String, i64)> {
     Some((domain, seconds))
 }
 
-fn browser_is_foreground() -> bool {
+fn browser_is_foreground(browser_pid: Option<u32>) -> bool {
     if platform::idle_millis().is_none_or(|idle| idle > 60_000) {
         return false;
     }
     let Some((pid, _)) = platform::foreground_window() else {
         return false;
     };
-    let pid = Pid::from_u32(pid);
+    // A Chrome bridge must not credit its last tab while Opera (or another
+    // browser instance) is foreground. Bind the pipe to its launching process.
+    browser_pid == Some(pid)
+}
+
+fn native_browser_pid() -> Option<u32> {
     let mut system = System::new();
-    system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
-    let Some(process) = system.process(pid) else {
-        return false;
-    };
-    let name = process.name().to_string_lossy().to_ascii_lowercase();
-    matches!(
-        name.as_str(),
-        "chrome.exe" | "msedge.exe" | "brave.exe" | "opera.exe" | "opera_gx.exe" | "vivaldi.exe"
-    )
+    let own_pid = Pid::from_u32(std::process::id());
+    system.refresh_processes(ProcessesToUpdate::Some(&[own_pid]), true);
+    let mut pid = system.process(own_pid)?.parent()?;
+    // Some Chromium builds launch native hosts through a hidden cmd.exe pipe
+    // wrapper. Follow that wrapper without accepting unrelated parent apps.
+    for _ in 0..4 {
+        system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+        let process = system.process(pid)?;
+        let name = process.name().to_string_lossy().to_ascii_lowercase();
+        if matches!(
+            name.as_str(),
+            "chrome.exe"
+                | "msedge.exe"
+                | "brave.exe"
+                | "opera.exe"
+                | "opera_gx.exe"
+                | "vivaldi.exe"
+        ) {
+            return Some(pid.as_u32());
+        }
+        if name != "cmd.exe" {
+            return None;
+        }
+        pid = process.parent()?;
+    }
+    None
 }
 
 fn validate_domain(value: &str) -> Option<String> {
@@ -115,6 +138,10 @@ fn validate_domain(value: &str) -> Option<String> {
         return None;
     }
     let normalized = value.to_ascii_lowercase();
+    let normalized = normalized
+        .strip_prefix("www.")
+        .unwrap_or(&normalized)
+        .to_owned();
     if normalized.split('.').any(|label| {
         label.is_empty()
             || label.len() > 63
@@ -147,6 +174,10 @@ mod tests {
         assert_eq!(
             validate_domain("Docs.Example.COM"),
             Some("docs.example.com".into())
+        );
+        assert_eq!(
+            validate_domain("WWW.YouTube.COM"),
+            Some("youtube.com".into())
         );
         for invalid in [
             "",
@@ -192,5 +223,8 @@ mod tests {
             db.website_summary_for_day(&day).unwrap(),
             vec![("example.com".into(), 5)]
         );
+        db.set_preference("tracking_enabled", "false").unwrap();
+        assert!(!record_message_with_foreground(&db, &message, true));
+        assert_eq!(db.website_summary_for_day(&day).unwrap()[0].1, 5);
     }
 }

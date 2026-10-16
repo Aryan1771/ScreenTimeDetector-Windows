@@ -80,6 +80,26 @@ async function settle() {
     await new Promise((resolve) => setImmediate(resolve));
 }
 
+test("YouTube page changes send only a normalized domain and active seconds", async () => {
+    const window = { focused: true, incognito: false, state: "normal", tabs: [
+        { active: true, incognito: false, url: "https://www.youtube.com/watch?v=private-video-id&search_query=private-query" }
+    ] };
+    const app = makeExtension(window);
+    await settle();
+    app.setTime(6_000);
+    await app.sample();
+    window.tabs[0].url = "https://youtube.com/shorts/another-private-id";
+    app.setTime(11_000);
+    await app.sample();
+    assert.deepEqual(app.messages.map(({domain, seconds}) => ({domain, seconds})), [
+        { domain: "youtube.com", seconds: 5 }, { domain: "youtube.com", seconds: 5 }
+    ]);
+    for (const message of app.messages) {
+        assert.deepEqual(Object.keys(message).sort(), ["domain", "seconds", "type"]);
+    }
+    assert.equal(JSON.stringify(app.messages).includes("private"), false);
+});
+
 test("attributes active hostnames across tabs and excludes idle, unfocused, and private windows", async () => {
     const window = {
         focused: true,

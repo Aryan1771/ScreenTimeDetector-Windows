@@ -36,7 +36,8 @@ impl Tray {
             .map_err(|e| e.to_string())?;
         menu.append(&quit).map_err(|e| e.to_string())?;
 
-        let icon = Icon::from_rgba(wellbeing_icon(), 32, 32).map_err(|e| e.to_string())?;
+        let icon = Icon::from_rgba(include_bytes!("../assets/logo-32.rgba").to_vec(), 32, 32)
+            .map_err(|e| e.to_string())?;
         let icon = TrayIconBuilder::new()
             .with_tooltip("Digital Wellbeing · tracking")
             .with_icon(icon)
@@ -73,35 +74,4 @@ impl Tray {
         }
         None
     }
-}
-
-fn wellbeing_icon() -> Vec<u8> {
-    let mut pixels = vec![0_u8; 32 * 32 * 4];
-    for y in 0..32_i32 {
-        for x in 0..32_i32 {
-            let dx = x - 15;
-            let dy = y - 15;
-            let distance_squared = dx * dx + dy * dy;
-            let ring = (82..=196).contains(&distance_squared);
-            let pulse = (6..=25).contains(&x)
-                && y == 16
-                    + if x < 13 {
-                        0
-                    } else if x < 16 {
-                        -5
-                    } else if x < 19 {
-                        5
-                    } else {
-                        0
-                    };
-            if ring || pulse {
-                let index = ((y * 32 + x) * 4) as usize;
-                pixels[index] = if ring { 84 } else { 131 };
-                pixels[index + 1] = if ring { 125 } else { 155 };
-                pixels[index + 2] = if ring { 120 } else { 138 };
-                pixels[index + 3] = 255;
-            }
-        }
-    }
-    pixels
 }

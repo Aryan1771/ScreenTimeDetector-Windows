@@ -8,11 +8,12 @@ This is an early Windows release, not yet the complete product vision. The Windo
 
 | Feature | Windows status |
 |---|---|
-| Foreground application usage | Implemented; sampled every five seconds |
+| Foreground application usage | One focused application at a time, sampled every second; minimized, hidden, desktop and taskbar windows are excluded |
 | Recent-input idle exclusion | Implemented; usage pauses after 60 seconds idle |
 | Lock screen / secure desktop exclusion | Implemented using the active Windows input desktop |
 | Sleep / long sampling gap recovery | Long gaps are discarded instead of counted as use |
 | Daily, hourly, weekly history | Implemented |
+| Dashboard chart selector | Daily view shows a Monday–Sunday week; select a bar to change the day. Hourly view shows the selected day's 24 hours; select an hour to see its apps and durations. The day total includes hours, minutes and seconds. |
 | Daily goal and 80% / reached reminders | Implemented |
 | App daily limits | Soft warning only; the app is never forcibly terminated |
 | Focus timer | Start, pause/resume, cancel, completion notification, persisted history |
@@ -24,9 +25,9 @@ This is an early Windows release, not yet the complete product vision. The Windo
 | System tray / keep tracking with dashboard hidden | Implemented; tray opens dashboard, starts/resumes a 25-minute focus, toggles tracking, or quits; tooltip shows today's total |
 | One running tracker / fast dashboard reopen | Implemented; a second launch activates the existing process instead of duplicating tracking |
 | Windows console window | Disabled; app launches as a GUI process |
-| Browser domains | Optional Chromium extension and native bridge for Chrome/Edge; stores active hostnames only after installing the extension |
+| Browser domains | Optional Chromium extension and native bridge for Opera GX, Chrome and Edge; app includes setup instructions and extension-folder shortcut |
 | Browser private windows | Website attribution is rejected for incognito/private windows; browser process time remains included in app totals |
-| Firefox, Brave, Opera, Vivaldi website integration | Not validated / not registered by the installer |
+| Firefox, Brave, Vivaldi website integration | Not validated |
 | Bedtime schedules / OS Do Not Disturb | Not implemented |
 | Hard app enforcement | Not implemented; limits are advisory |
 | ARM64 build | Not validated; installer targets x64 |
@@ -56,9 +57,9 @@ The installer is created at `target\installer\DigitalWellbeing-Setup-x64.exe`. I
 
 ## Windows verification
 
-Automated checks cover SQLite aggregation/sorting, website domain validation and aggregation, weekly/monthly analytics, app-limit persistence, preference persistence, history deletion scope, and focus-session recovery. The Chromium extension has a Node test for tab changes, hostname-only output, private windows, idle state, and browser focus. They do not replace real-session verification of Win32 foreground/idle/lock behavior or a live Chrome/Edge native-messaging run.
+Automated checks cover foreground intervals during app switches, minimization/restoration, paused/idle periods and sleep; SQLite aggregation/sorting; website domain validation and aggregation; weekly/monthly analytics; app-limit and preference persistence; history deletion scope; and focus-session recovery. The Chromium extension has a Node test for tab changes, hostname-only output, private windows, idle state, and browser focus. They do not replace real-session verification of Win32 foreground/idle/lock behavior or a live browser native-messaging run.
 
-For optional domain-level tracking, install the app, open the browser extensions page, enable Developer mode, and choose Load unpacked with the installed app's browser/chromium folder. Website tracking stays off until this extension is loaded. The installer registers the native bridge for Chrome and Edge. Private/incognito access is not requested, and private tabs are rejected if the setting is later enabled manually.
+For domain-level tracking in Opera GX, open **Set up website tracking** on the dashboard, then open `opera://extensions`, enable Developer mode, and choose **Load unpacked** with the installed app's `browser/chromium` folder. The app has buttons to open both locations. Keep a normal website such as youtube.com focused for at least ten seconds. Website tracking starts only after the extension is loaded; installing the desktop app alone cannot install a browser extension. The installer registers the Chrome native bridge location used by Opera, and Edge's native bridge. Private/incognito access is not requested, and private tabs are rejected if the setting is later enabled manually. Website durations are a breakdown of browser time and are never added again to the overall total.
 
 Manual smoke test on the Windows machine:
 
@@ -73,6 +74,8 @@ Manual smoke test on the Windows machine:
 9. Close the dashboard with its X; confirm it hides and the tray tooltip/usage continue updating. Launch the app again and confirm the existing dashboard reopens without a second tracker. Start focus from the tray, reopen the dashboard, then use Quit from the tray to stop.
 10. Enable sign-in startup in Settings (or in the installer), sign out/in, and confirm the app starts hidden with no console window. Open it from Start and confirm today's usage accumulated since sign-in.
 11. In Chrome or Edge, load the unpacked extension. Browse a normal site while the browser is focused and confirm the hostname appears. Switch to another app, idle for a minute, open a private window, and visit a file or browser settings page; those periods should not be attributed to a website.
+12. In Opera GX, follow the dashboard's website setup page, then verify youtube.com usage. Minimize Opera and use a different app: only that app's time should grow. Restore Opera and confirm website attribution resumes. Pause tracking and confirm both app and website durations stop.
+13. With many recorded applications and websites, scroll through the dashboard: every row must remain inside its own card, and progress bars must align with their labels. Verify the supplied green heart logo in the sidebar, title/taskbar, tray and installer.
 
 ## Linux
 

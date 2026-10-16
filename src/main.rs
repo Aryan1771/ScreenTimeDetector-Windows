@@ -1,5 +1,6 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod activity;
 #[cfg(windows)]
 mod browser_bridge;
 mod notifications;
@@ -20,9 +21,15 @@ mod windows_app {
     pub fn open_notification_settings() -> Result<(), String> {
         Err("Windows notification settings are only available on Windows.".into())
     }
+    pub fn open_browser_extension_folder() -> Result<(), String> {
+        Err("Open the browser/chromium folder in the application source directory.".into())
+    }
+    pub fn open_opera_extensions() -> Result<(), String> {
+        Err("Open opera://extensions in Opera GX to continue.".into())
+    }
 }
 
-use chrono::{Local, NaiveDate, Timelike};
+use chrono::{Datelike, Local, NaiveDate, Timelike};
 use directories::ProjectDirs;
 use slint::{ModelRc, TimerMode, VecModel};
 use std::{
@@ -96,6 +103,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = db.recover_focus_sessions();
     let monitoring_supported = platform::supported();
     let tracking = Arc::new(AtomicBool::new(true));
+    db.set_preference("tracking_enabled", "true")?;
     let break_minutes = Arc::new(AtomicU32::new(
         db.preference("break_reminder_minutes", "45")?
             .parse()
@@ -165,6 +173,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window.set_weekly_bars(ModelRc::new(VecModel::from(Vec::<ChartItem>::new())));
     window.set_monthly_bars(ModelRc::new(VecModel::from(Vec::<ChartItem>::new())));
     let initial_day = Local::now().date_naive();
+    window.set_selected_hour(Local::now().hour() as i32);
+    refresh_day_view(&window, &db, initial_day);
     window.set_date_label(format_day(initial_day).into());
     if let Ok((total, _)) = db.summary_for_day(&initial_day) {
         window.set_today_total(format_duration(total).into());
@@ -264,14 +274,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
+    {
+        let weak = window.as_weak();
+        window.on_open_browser_extension_folder(move || {
+            if let Err(error) = windows_app::open_browser_extension_folder()
+                && let Some(window) = weak.upgrade()
+            {
+                window.set_notice_text(error.into());
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.on_open_opera_extensions(move || {
+            if let Err(error) = windows_app::open_opera_extensions()
+                && let Some(window) = weak.upgrade()
+            {
+                window.set_notice_text(error.into());
+            }
+        });
+    }
 
     {
         let weak = window.as_weak();
         let state = tracking.clone();
         let supported = monitoring_supported;
+        let path = db_path.clone();
         window.on_toggle_tracking(move || {
             let next = !state.load(Ordering::Relaxed);
             state.store(next, Ordering::Relaxed);
+            if let Ok(db) = storage::Database::open(&path) {
+                let _ = db.set_preference("tracking_enabled", if next { "true" } else { "false" });
+            }
             if let Some(window) = weak.upgrade() {
                 window.set_tracking(next);
                 window.set_status_text(
@@ -290,13 +324,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let weak = window.as_weak();
         let selected = selected_day.clone();
+        let path = db_path.clone();
         window.on_navigate_day(move |offset| {
             if let Ok(mut selected_day) = selected.lock() {
                 let today = Local::now().date_naive();
                 let next = *selected_day + chrono::Duration::days(i64::from(offset));
                 *selected_day = next.min(today);
                 if let Some(window) = weak.upgrade() {
-                    window.set_date_label(format_day(*selected_day).into());
+                    if let Ok(db) = storage::Database::open(&path) {
+                        refresh_day_view(&window, &db, *selected_day);
+                    }
                 }
             }
         });
@@ -304,6 +341,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let weak = window.as_weak();
         let selected = selected_day.clone();
+        let path = db_path.clone();
         window.on_select_date(move |date| {
             let Ok(date) = NaiveDate::parse_from_str(date.as_str(), "%Y-%m-%d") else {
                 return;
@@ -313,8 +351,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Ok(mut selected_day) = selected.lock() {
                     *selected_day = date;
                     if let Some(window) = weak.upgrade() {
-                        window.set_date_label(format_day(date).into());
+                        if let Ok(db) = storage::Database::open(&path) {
+                            refresh_day_view(&window, &db, date);
+                            window.set_page("Dashboard".into());
+                        }
                     }
+                }
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let selected = selected_day.clone();
+        let path = db_path.clone();
+        window.on_select_hour(move |hour| {
+            if !(0..24).contains(&hour) {
+                return;
+            }
+            if let Some(window) = weak.upgrade() {
+                window.set_selected_hour(hour);
+                if let (Ok(day), Ok(db)) = (selected.lock(), storage::Database::open(&path)) {
+                    refresh_hour_view(&window, &db, *day);
                 }
             }
         });
@@ -567,6 +624,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     tray::Action::ToggleTracking => {
                         let next = !tracking.load(Ordering::Relaxed);
                         tracking.store(next, Ordering::Relaxed);
+                        if let Ok(db) = storage::Database::open(&db_path) {
+                            let _ = db.set_preference(
+                                "tracking_enabled",
+                                if next { "true" } else { "false" },
+                            );
+                        }
                         w.set_tracking(next);
                         w.set_status_text(
                             if next {
@@ -633,9 +696,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         w.set_date_label(format_day(day).into());
         if let Ok(db) = storage::Database::open(&refresh_path) {
-            w.set_websites(ModelRc::new(VecModel::from(website_items(&db, &day))));
-            if let Ok((total, rows)) = db.summary_for_day(&day) {
-                w.set_today_total(format_duration(total).into());
+            refresh_day_view(&w, &db, day);
+            if let Ok((total, _)) = db.summary_for_day(&day) {
                 #[cfg(windows)]
                 if let Some(tray) = tray_for_tooltip.as_ref() {
                     let today_total = db
@@ -652,43 +714,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         format_duration(today_total)
                     ));
                 }
-                let limits = db.app_limits().unwrap_or_default();
-                let max = rows.iter().map(|r| r.1).max().unwrap_or(1).max(1);
-                let items = rows
-                    .into_iter()
-                    .map(|(name, secs)| UsageItem {
-                        app_id: name.to_lowercase().into(),
-                        name: name.clone().into(),
-                        duration: format_duration(secs).into(),
-                        share: ((secs * 100 / max).clamp(3, 100)) as i32,
-                        limit_minutes: limits.get(&name.to_lowercase()).copied().unwrap_or(0)
-                            as i32,
-                        limit_label: limits
-                            .get(&name.to_lowercase())
-                            .map(|limit| format!("Limit · {}m", limit))
-                            .unwrap_or_else(|| "Set 30m".into())
-                            .into(),
-                    })
-                    .collect::<Vec<_>>();
-                w.set_usages(ModelRc::new(VecModel::from(items)));
-            }
-            if let Ok(hours) = db.hourly_summary(&day) {
-                let max = hours.iter().copied().max().unwrap_or(1).max(1);
-                let bars = hours
-                    .into_iter()
-                    .enumerate()
-                    .map(|(hour, seconds)| ChartItem {
-                        label: format!("{hour:02}").into(),
-                        share: if seconds == 0 {
-                            0
-                        } else {
-                            (seconds * 100 / max).clamp(2, 100) as i32
-                        },
-                        value: format_duration(seconds).into(),
-                        day_key: "".into(),
-                    })
-                    .collect::<Vec<_>>();
-                w.set_hourly_bars(ModelRc::new(VecModel::from(bars)));
             }
             if let Ok(days) = db.week_summary(&day) {
                 let max = days
@@ -820,31 +845,34 @@ fn start_tracker(
             let mut sys = System::new();
             let db = storage::Database::open(&db_path).ok();
             let mut last = Instant::now();
+            let mut activity = activity::ActivityClock::default();
             let mut continuous = Duration::ZERO;
             let mut break_threshold = None;
             let mut notified_apps = HashSet::<(NaiveDate, String, u8)>::new();
             let mut goal_notified = HashSet::<(NaiveDate,u8)>::new();
             loop {
-                thread::sleep(Duration::from_secs(5));
+                thread::sleep(Duration::from_secs(1));
                 let now = Instant::now();
                 // A long gap usually means suspend, sleep, or a stalled process. Do not
                 // credit the gap as active foreground use after the machine wakes.
                 let elapsed = now.duration_since(last);
-                let seconds = if elapsed <= Duration::from_secs(10) {
-                    elapsed.as_secs() as i64
-                } else {
-                    0
-                };
                 last = now;
-                if seconds == 0 || !tracking.load(Ordering::Relaxed) {
+                if !tracking.load(Ordering::Relaxed) {
+                    activity.observe(elapsed, None);
                     continuous=Duration::ZERO;
                     continue;
                 }
                 if platform::idle_millis().is_none_or(|idle| idle > 60_000) {
+                    activity.observe(elapsed, None);
                     continuous=Duration::ZERO;
                     continue;
                 }
                 let Some((pid, title)) = platform::foreground_window() else {
+                    activity.observe(elapsed, None);
+                    continuous = Duration::ZERO;
+                    continue;
+                };
+                let Some((_, seconds)) = activity.observe(elapsed, Some(pid)) else {
                     continuous = Duration::ZERO;
                     continue;
                 };
@@ -916,6 +944,119 @@ fn focus_message(session: Option<&FocusSession>) -> String {
             session.remaining.as_secs().div_ceil(60)
         ),
     }
+}
+
+fn refresh_day_view(w: &AppWindow, db: &storage::Database, day: NaiveDate) {
+    let today = Local::now().date_naive();
+    w.set_date_label(format_day(day).into());
+    w.set_selected_day_key(day.to_string().into());
+    w.set_today_key(today.to_string().into());
+    w.set_websites(ModelRc::new(VecModel::from(website_items(db, &day))));
+    if let Ok((total, rows)) = db.summary_for_day(&day) {
+        w.set_today_total(format_duration(total).into());
+        w.set_full_day_total(format_full_duration(total).into());
+        let limits = db.app_limits().unwrap_or_default();
+        let max = rows.iter().map(|r| r.1).max().unwrap_or(1).max(1);
+        let items = rows
+            .into_iter()
+            .map(|(name, seconds)| {
+                let id = name.to_lowercase();
+                UsageItem {
+                    app_id: id.clone().into(),
+                    name: name.into(),
+                    duration: format_duration(seconds).into(),
+                    share: (seconds * 100 / max).clamp(3, 100) as i32,
+                    limit_minutes: limits.get(&id).copied().unwrap_or(0) as i32,
+                    limit_label: limits
+                        .get(&id)
+                        .map(|limit| format!("Limit · {limit}m"))
+                        .unwrap_or_else(|| "Set 30m".into())
+                        .into(),
+                }
+            })
+            .collect::<Vec<_>>();
+        w.set_usages(ModelRc::new(VecModel::from(items)));
+    }
+    let week_start = day - chrono::Duration::days(i64::from(day.weekday().num_days_from_monday()));
+    let week_end = week_start + chrono::Duration::days(6);
+    w.set_chart_week_label(
+        format!(
+            "{} – {}",
+            week_start.format("%d %b %Y"),
+            week_end.format("%d %b %Y")
+        )
+        .into(),
+    );
+    if let Ok(days) = db.week_summary(&week_end) {
+        let maximum = days
+            .iter()
+            .map(|(_, seconds)| *seconds)
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        let bars = days
+            .into_iter()
+            .map(|(date, seconds)| ChartItem {
+                label: date.format("%a %d").to_string().into(),
+                value: if date > today {
+                    "—".into()
+                } else {
+                    format_duration(seconds).into()
+                },
+                day_key: date.to_string().into(),
+                share: if seconds == 0 {
+                    0
+                } else {
+                    (seconds * 100 / maximum).clamp(2, 100) as i32
+                },
+            })
+            .collect::<Vec<_>>();
+        w.set_daily_bars(ModelRc::new(VecModel::from(bars)));
+    }
+    if let Ok(hours) = db.hourly_summary(&day) {
+        let bars = hours
+            .into_iter()
+            .enumerate()
+            .map(|(hour, seconds)| ChartItem {
+                label: format!("{hour:02}").into(),
+                value: format_full_duration(seconds).into(),
+                day_key: String::new().into(),
+                share: if seconds == 0 {
+                    0
+                } else {
+                    (seconds * 100 / 3600).clamp(1, 100) as i32
+                },
+            })
+            .collect::<Vec<_>>();
+        w.set_hourly_bars(ModelRc::new(VecModel::from(bars)));
+    }
+    refresh_hour_view(w, db, day);
+}
+
+fn refresh_hour_view(w: &AppWindow, db: &storage::Database, day: NaiveDate) {
+    let hour = w.get_selected_hour().clamp(0, 23) as u32;
+    let apps = db.applications_for_hour(&day, hour).unwrap_or_default();
+    let total = apps.iter().map(|(_, seconds)| seconds).sum();
+    w.set_hour_label(format!("{hour:02}:00 – {:02}:00", hour + 1).into());
+    w.set_hour_total(format_full_duration(total).into());
+    w.set_hour_apps(ModelRc::new(VecModel::from(
+        apps.into_iter()
+            .map(|(name, seconds)| HourAppItem {
+                name: name.into(),
+                duration: format_full_duration(seconds).into(),
+            })
+            .collect::<Vec<_>>(),
+    )));
+}
+
+fn format_full_duration(seconds: i64) -> String {
+    let seconds = seconds.max(0);
+    format!(
+        "{}h {:02}m {:02}s",
+        seconds / 3600,
+        (seconds % 3600) / 60,
+        seconds % 60
+    )
 }
 
 fn format_day(day: NaiveDate) -> String {

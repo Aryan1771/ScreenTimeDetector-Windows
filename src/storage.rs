@@ -9,6 +9,7 @@ pub struct Database {
 impl Database {
     pub fn open(path: &Path) -> rusqlite::Result<Self> {
         let conn = Connection::open(path)?;
+        conn.busy_timeout(std::time::Duration::from_secs(10))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.execute_batch("CREATE TABLE IF NOT EXISTS applications (id TEXT PRIMARY KEY, display_name TEXT NOT NULL);\
@@ -93,6 +94,20 @@ impl Database {
             }
         }
         Ok(hours)
+    }
+
+    pub fn applications_for_hour(
+        &self,
+        day: &NaiveDate,
+        hour: u32,
+    ) -> rusqlite::Result<Vec<(String, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT a.display_name,u.active_seconds FROM hourly_usage u JOIN applications a ON a.id=u.app_id WHERE u.day=?1 AND u.hour=?2 AND u.active_seconds>0 ORDER BY u.active_seconds DESC,a.display_name COLLATE NOCASE ASC",
+        )?;
+        stmt.query_map(params![day.to_string(), hour], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?
+        .collect()
     }
 
     pub fn week_summary(&self, end_day: &NaiveDate) -> rusqlite::Result<Vec<(NaiveDate, i64)>> {
@@ -314,6 +329,53 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_writers_and_checkpoints_preserve_totals_and_integrity() {
+        let directory = std::env::temp_dir().join(format!(
+            "wellbeing-storage-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("usage.sqlite3");
+        let day = NaiveDate::from_ymd_opt(2026, 10, 16).unwrap();
+        let db = Database::open(&path).unwrap();
+        let workers: Vec<_> = (0..4)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let db = Database::open(&path).unwrap();
+                    for _ in 0..100 {
+                        db.add_usage(&day, "opera.exe", "Opera GX", 12, 1).unwrap();
+                        db.add_website_usage(&day, 12, "youtube.com", 1).unwrap();
+                        db.conn
+                            .execute_batch("PRAGMA wal_checkpoint(PASSIVE)")
+                            .unwrap();
+                    }
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        assert_eq!(db.summary_for_day(&day).unwrap().0, 400);
+        assert_eq!(db.hourly_summary(&day).unwrap()[12], 400);
+        assert_eq!(
+            db.website_summary_for_day(&day).unwrap(),
+            vec![("youtube.com".into(), 400)]
+        );
+        let integrity: String = db
+            .conn
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(integrity, "ok");
+        drop(db);
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
 
     fn memory_db() -> Database {
         Database::open(Path::new(":memory:")).expect("initialize in-memory SQLite database")

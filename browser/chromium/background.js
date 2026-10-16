@@ -22,6 +22,9 @@ function connectNativeHost() {
     }
     nativePort.onMessage.addListener(() => {});
     nativePort.onDisconnect.addListener(() => {
+        // Read the error inside the callback so Chromium does not report an
+        // unchecked-runtime-error banner while the app is being updated.
+        void chrome.runtime.lastError;
         nativePort = null;
         stopSampling();
         scheduleReconnect();
@@ -63,7 +66,7 @@ function hostnameFromTab(tab) {
     try {
         const parsed = new URL(tab.url);
         if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
-        const hostname = parsed.hostname.toLowerCase();
+        const hostname = parsed.hostname.toLowerCase().replace(/^www\./, "");
         return hostname && hostname.length <= 253 ? hostname : null;
     } catch (_) {
         return null;
