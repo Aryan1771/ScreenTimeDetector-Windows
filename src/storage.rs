@@ -60,7 +60,7 @@ impl Database {
 
     pub fn website_summary_for_day(&self, day: &NaiveDate) -> rusqlite::Result<Vec<(String, i64)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT domain,SUM(active_seconds) FROM website_usage WHERE day=?1 GROUP BY domain ORDER BY SUM(active_seconds) DESC,domain COLLATE NOCASE ASC",
+            "SELECT CASE WHEN domain LIKE 'www.%' THEN substr(domain,5) ELSE domain END AS hostname,SUM(active_seconds) FROM website_usage WHERE day=?1 GROUP BY hostname ORDER BY SUM(active_seconds) DESC,hostname COLLATE NOCASE ASC",
         )?;
         stmt.query_map([day.to_string()], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))

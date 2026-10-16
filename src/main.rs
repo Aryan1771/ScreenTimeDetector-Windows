@@ -88,6 +88,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return browser_bridge::run();
     }
     #[cfg(windows)]
+    windows_app::configure_shell_identity();
+    #[cfg(windows)]
     let instance_guard = {
         let Some(instance) = windows_app::SingleInstance::acquire()? else {
             return Ok(());

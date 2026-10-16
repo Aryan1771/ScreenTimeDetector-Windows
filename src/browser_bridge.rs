@@ -79,6 +79,7 @@ unsafe extern "system" {
     fn GetNamedPipeClientProcessId(pipe: *mut c_void, pid: *mut u32) -> i32;
     fn ProcessIdToSessionId(pid: u32, session: *mut u32) -> i32;
     fn GetLastError() -> u32;
+    fn FlushFileBuffers(handle: *mut c_void) -> i32;
 }
 
 fn pipe_name() -> io::Result<String> {
@@ -137,7 +138,13 @@ pub fn start_receiver(path: PathBuf, tracking: Arc<AtomicBool>) -> io::Result<()
                         || unsafe { GetLastError() } == 535; // already connected
                 if connected {
                     let accepted = receive_sample(&mut pipe, &path, &tracking).unwrap_or(false);
-                    let _ = pipe.write_all(&[u8::from(accepted)]);
+                    if pipe.write_all(&[u8::from(accepted)]).is_ok() {
+                        // Do not close the server end until the host consumes its
+                        // acknowledgement; otherwise Windows may discard it.
+                        unsafe {
+                            FlushFileBuffers(pipe.as_raw_handle());
+                        }
+                    }
                 }
                 drop(pipe);
                 next = create().ok();

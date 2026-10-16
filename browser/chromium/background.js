@@ -53,7 +53,10 @@ function stopSampling() {
 }
 
 function requestSampleSoon() {
-    if (!nativePort) return;
+    if (!nativePort) {
+        connectNativeHost();
+        return;
+    }
     if (sampleInProgress) {
         samplePending = true;
         return;

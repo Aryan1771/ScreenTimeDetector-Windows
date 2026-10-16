@@ -25,6 +25,15 @@ unsafe extern "system" {
     fn GetLastError() -> u32;
 }
 
+pub fn configure_shell_identity() {
+    // Set this before creating any windows so Windows uses this app's shortcut
+    // and icon instead of inheriting the launcher's taskbar grouping.
+    let id = wide("DigitalWellbeing.Desktop");
+    unsafe {
+        SetCurrentProcessExplicitAppUserModelID(id.as_ptr());
+    }
+}
+
 #[link(name = "user32")]
 unsafe extern "system" {
     fn EnumWindows(
@@ -38,6 +47,7 @@ unsafe extern "system" {
 
 #[link(name = "shell32")]
 unsafe extern "system" {
+    fn SetCurrentProcessExplicitAppUserModelID(app_id: *const u16) -> i32;
     fn ShellExecuteW(
         window: *mut c_void,
         operation: *const u16,

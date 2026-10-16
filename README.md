@@ -32,7 +32,9 @@ This is an early Windows release, not yet the complete product vision. The Windo
 | Hard app enforcement | Not implemented; limits are advisory |
 | ARM64 build | Not validated; installer targets x64 |
 
-The application does not collect keystrokes, screenshots, clipboard contents, full URLs, page contents, or telemetry. The optional browser extension reads the active tab URL locally, reduces it to a hostname, and sends only the hostname and a short duration sample to the native app. The app independently checks that an allowed browser is the foreground process and that the user is active before it records the sample. Application names, website hostnames, local dates, active seconds, preferences, limits, and focus-session records are stored in a per-user SQLite database. The database is not encrypted by the application; rely on Windows account/device encryption for at-rest protection.
+The application does not collect keystrokes, screenshots, clipboard contents, full URLs, page contents, or telemetry. The optional browser extension reads the active tab URL locally, reduces it to a hostname, and sends only the hostname and a short duration sample to the native app. A local Windows pipe forwards samples to the running desktop tracker, so the browser host never opens a separate database, even when Windows redirects a launcher's AppData folder. The tracker verifies the host executable, launching browser, foreground state, idle state and tracking pause setting. Application names, website hostnames, local dates, active seconds, preferences, limits, and focus-session records are stored in a per-user SQLite database. The database is not encrypted by the application; rely on Windows account/device encryption for at-rest protection.
+
+The application and extension use the transparent PNG in `assets/logo.png`, including a transparent heart cutout. Windows executable/installer icons contain PNG frames in the required ICO container; the tray uses RGBA pixels derived from the same PNG.
 
 ## Build and run on Windows
 

@@ -1,5 +1,5 @@
 #define ProductName "Digital Wellbeing"
-#define ProductVersion "0.2.2"
+#define ProductVersion "0.2.3"
 #define ProductAppId "DigitalWellbeing.Desktop"
 
 [Setup]
@@ -16,6 +16,7 @@ OutputBaseFilename=DigitalWellbeing-Setup-x64
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+ChangesAssociations=yes
 SetupIconFile=..\..\assets\logo.ico
 UninstallDisplayIcon={app}\digital-wellbeing.exe
 LicenseFile=..\..\LICENSE
@@ -27,9 +28,11 @@ Name: "autostart"; Description: "Start Digital Wellbeing when I sign in"; GroupD
 Source: "..\..\target\release\digital-wellbeing.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\browser\chromium\*"; DestDir: "{app}\browser\chromium"; Excludes: "tests\*"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "browser-bridge-manifest.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\assets\logo.png"; DestDir: "{app}\assets"; DestName: "logo-{#ProductVersion}.png"; Flags: ignoreversion
+Source: "..\..\assets\logo.ico"; DestDir: "{app}\assets"; DestName: "logo-{#ProductVersion}.ico"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\Digital Wellbeing"; Filename: "{app}\digital-wellbeing.exe"; WorkingDir: "{app}"; AppUserModelID: "{#ProductAppId}"
+Name: "{group}\Digital Wellbeing"; Filename: "{app}\digital-wellbeing.exe"; WorkingDir: "{app}"; IconFilename: "{app}\assets\logo-{#ProductVersion}.ico"; AppUserModelID: "{#ProductAppId}"
 Name: "{group}\Uninstall Digital Wellbeing"; Filename: "{uninstallexe}"
 
 [Registry]

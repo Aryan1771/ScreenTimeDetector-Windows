@@ -1,6 +1,6 @@
 # Chromium website tracking
 
-This Manifest V3 extension tracks active HTTP/HTTPS hostnames for Chrome, Edge, Brave, Opera, and Vivaldi. It sends domain-only, five-second samples to the installed Digital Wellbeing app over the browser's native-messaging pipe. The Windows app also checks that a supported browser process is actually foreground and the user is not idle before it saves a sample.
+This Manifest V3 extension tracks active HTTP/HTTPS hostnames for Chrome, Edge, Brave, Opera, and Vivaldi. It sends domain-only, five-second samples over native messaging. The native host forwards them through a local Windows pipe to the running desktop tracker, which saves them in the same database used by the dashboard. The host does not open its own database. The Windows app also checks the exact launching browser process, foreground state, idle state, and tracking pause setting before saving a sample. Keep the desktop tracker running, including in the system tray.
 
 It does not request browser history, file access, page contents, or private-window access. Browser extensions are disabled in private/incognito windows by default; if you enable this extension there, the extension still rejects incognito windows. Non-web pages such as file URLs, browser settings, and extension pages are not recorded. Only hostnames are saved, with no paths, query strings, titles, or page contents.
 
