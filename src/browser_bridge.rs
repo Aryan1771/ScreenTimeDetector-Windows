@@ -1,8 +1,17 @@
 use std::io::{self, Read, Write};
 
 use chrono::{Local, Timelike};
-use directories::ProjectDirs;
 use serde_json::{Value, json};
+use std::{
+    ffi::c_void,
+    fs::{File, OpenOptions},
+    os::windows::io::{AsRawHandle, FromRawHandle},
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 use sysinfo::{Pid, ProcessesToUpdate, System};
 
 use crate::platform;
@@ -18,15 +27,7 @@ pub fn is_host_argument(argument: &std::ffi::OsStr) -> bool {
         || argument == CHROME_EXTENSION_ORIGIN
 }
 
-pub fn run(
-    data_dir_override: Option<std::path::PathBuf>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let dirs = ProjectDirs::from("org", "DigitalWellbeing", "DigitalWellbeing")
-        .ok_or("could not locate per-user data directory")?;
-    let data_dir = data_dir_override.unwrap_or_else(|| dirs.data_dir().to_path_buf());
-    std::fs::create_dir_all(&data_dir)?;
-    let db_path = data_dir.join("wellbeing.sqlite3");
-    let db = Database::open(&db_path)?;
+pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let browser_pid = native_browser_pid();
     let stdin = io::stdin();
     let mut input = stdin.lock();
@@ -51,13 +52,135 @@ pub fn run(
         input.read_exact(&mut bytes)?;
         let result = serde_json::from_slice::<Value>(&bytes)
             .ok()
-            .is_some_and(|message| record_message(&db, &message, browser_pid));
+            .is_some_and(|message| {
+                parse_website_usage(&message).is_some()
+                    && browser_is_foreground(browser_pid)
+                    && forward_to_tracker(&bytes).unwrap_or(false)
+            });
         write_response(&mut output, &json!({"ok": result}))?;
     }
 }
 
-fn record_message(db: &Database, message: &Value, browser_pid: Option<u32>) -> bool {
-    record_message_with_foreground(db, message, browser_is_foreground(browser_pid))
+// The browser host never opens SQLite. Packaged launchers can redirect AppData
+// differently from browsers, so only the running tracker owns website storage.
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn CreateNamedPipeW(
+        name: *const u16,
+        access: u32,
+        mode: u32,
+        instances: u32,
+        out_size: u32,
+        in_size: u32,
+        timeout: u32,
+        security: *mut c_void,
+    ) -> *mut c_void;
+    fn ConnectNamedPipe(pipe: *mut c_void, overlapped: *mut c_void) -> i32;
+    fn GetNamedPipeClientProcessId(pipe: *mut c_void, pid: *mut u32) -> i32;
+    fn ProcessIdToSessionId(pid: u32, session: *mut u32) -> i32;
+    fn GetLastError() -> u32;
+}
+
+fn pipe_name() -> io::Result<String> {
+    let mut session = 0;
+    if unsafe { ProcessIdToSessionId(std::process::id(), &mut session) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(format!(r"\\.\pipe\DigitalWellbeing.Website.v1.{session}"))
+}
+
+fn forward_to_tracker(bytes: &[u8]) -> io::Result<bool> {
+    let mut pipe = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(pipe_name()?)?;
+    pipe.write_all(&(bytes.len() as u32).to_le_bytes())?;
+    pipe.write_all(bytes)?;
+    let mut reply = [0];
+    pipe.read_exact(&mut reply)?;
+    Ok(reply[0] == 1)
+}
+
+pub fn start_receiver(path: PathBuf, tracking: Arc<AtomicBool>) -> io::Result<()> {
+    let name: Vec<u16> = pipe_name()?.encode_utf16().chain(Some(0)).collect();
+    // Duplex byte pipe, one instance, remote clients rejected, default owner ACL.
+    let create = move || {
+        let raw = unsafe {
+            CreateNamedPipeW(
+                name.as_ptr(),
+                3 | 0x00080000,
+                8,
+                1,
+                1024,
+                4096,
+                1000,
+                std::ptr::null_mut(),
+            )
+        };
+        if raw as isize == -1 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(unsafe { File::from_raw_handle(raw) })
+        }
+    };
+    let first = create()?;
+    std::thread::Builder::new()
+        .name("website-receiver".into())
+        .spawn(move || {
+            let mut next = Some(first);
+            loop {
+                let Some(mut pipe) = next.take() else {
+                    break;
+                };
+                let connected =
+                    unsafe { ConnectNamedPipe(pipe.as_raw_handle(), std::ptr::null_mut()) } != 0
+                        || unsafe { GetLastError() } == 535; // already connected
+                if connected {
+                    let accepted = receive_sample(&mut pipe, &path, &tracking).unwrap_or(false);
+                    let _ = pipe.write_all(&[u8::from(accepted)]);
+                }
+                drop(pipe);
+                next = create().ok();
+            }
+        })?;
+    Ok(())
+}
+
+fn receive_sample(
+    pipe: &mut File,
+    path: &std::path::Path,
+    tracking: &AtomicBool,
+) -> io::Result<bool> {
+    let mut client_pid = 0;
+    if unsafe { GetNamedPipeClientProcessId(pipe.as_raw_handle(), &mut client_pid) } == 0 {
+        return Ok(false);
+    }
+    let mut system = System::new();
+    let pid = Pid::from_u32(client_pid);
+    system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+    let own_exe = std::env::current_exe()?;
+    if system.process(pid).and_then(|p| p.exe()) != Some(own_exe.as_path()) {
+        return Ok(false);
+    }
+    let mut header = [0; 4];
+    pipe.read_exact(&mut header)?;
+    let length = u32::from_le_bytes(header) as usize;
+    if !(1..=4096).contains(&length) {
+        return Ok(false);
+    }
+    let mut bytes = vec![0; length];
+    pipe.read_exact(&mut bytes)?;
+    let Ok(message) = serde_json::from_slice::<Value>(&bytes) else {
+        return Ok(false);
+    };
+    if !tracking.load(Ordering::Relaxed) {
+        return Ok(false);
+    }
+    let foreground = browser_is_foreground(native_browser_pid_for(client_pid));
+    let Ok(db) = Database::open(path) else {
+        return Ok(false);
+    };
+    Ok(record_message_with_foreground(&db, &message, foreground))
 }
 
 fn record_message_with_foreground(db: &Database, message: &Value, foreground: bool) -> bool {
@@ -104,8 +227,12 @@ fn browser_is_foreground(browser_pid: Option<u32>) -> bool {
 }
 
 fn native_browser_pid() -> Option<u32> {
+    native_browser_pid_for(std::process::id())
+}
+
+fn native_browser_pid_for(process_id: u32) -> Option<u32> {
     let mut system = System::new();
-    let own_pid = Pid::from_u32(std::process::id());
+    let own_pid = Pid::from_u32(process_id);
     system.refresh_processes(ProcessesToUpdate::Some(&[own_pid]), true);
     let mut pid = system.process(own_pid)?.parent()?;
     // Some Chromium builds launch native hosts through a hidden cmd.exe pipe

@@ -85,7 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     #[cfg(windows)]
     if native_messaging_host {
-        return browser_bridge::run(data_dir_override);
+        return browser_bridge::run();
     }
     #[cfg(windows)]
     let instance_guard = {
@@ -104,6 +104,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let monitoring_supported = platform::supported();
     let tracking = Arc::new(AtomicBool::new(true));
     db.set_preference("tracking_enabled", "true")?;
+    #[cfg(windows)]
+    browser_bridge::start_receiver(db_path.clone(), tracking.clone())?;
     let break_minutes = Arc::new(AtomicU32::new(
         db.preference("break_reminder_minutes", "45")?
             .parse()
